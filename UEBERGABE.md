@@ -1,4 +1,4 @@
-# Übergabe – MQTT Dashboard (MK3)
+# Übergabe – MQTT Dashboard (MK4)
 
 Technische Übergabe für Weiterentwicklung. Nutzerdoku siehe `README.md`.
 
@@ -63,11 +63,19 @@ Eine Datei `app.py`, Aufbau von oben nach unten:
 
 ## Versionshistorie
 
+### v2.0.2
+- Projektname korrigiert: **MQTT-Dashboard-MK4** (vorher fälschlich MK3).
+  Ordner `/root/MQTT-Dashboard-MK4`, Dienst `mqtt-dashboard-mk4`,
+  Firewall-Regel `MQTT-Dashboard-MK4`, Zip `MQTT-Dashboard-MK4_v<Version>.zip`.
+- `install.sh` übernimmt eine Installation unter dem alten Namen
+  (`/root/MQTT-Dashboard-MK3`, Dienst `mqtt-dashboard-mk3`): Konfiguration
+  kopieren, alten Dienst und alte Firewall-Regel entfernen.
+
 ### v2.0.1
 - Installer `install.sh`/`uninstall.sh` für GL.iNet Brume 2 (OpenWrt):
-  Python per opkg nur falls nötig, Kopie nach `/root/MQTT-Dashboard-MK3`,
+  Python per opkg nur falls nötig, Kopie nach `/root/MQTT-Dashboard-MK4`,
   Übernahme einer v1.x-Konfiguration, Abschalten einer alten v1.x-Instanz
-  auf Port 5001, procd-Dienst `mqtt-dashboard-mk3`, Firewall-Regel,
+  auf Port 5001, procd-Dienst `mqtt-dashboard-mk4`, Firewall-Regel,
   Funktionstest. Anleitung: `INSTALL-BRUME2.md`.
 - `vendor/`: Flask 3.1, Werkzeug, Jinja2, MarkupSafe (ohne C-Erweiterung),
   itsdangerous, click 8.1 (letzte Version für Python 3.9), blinker,

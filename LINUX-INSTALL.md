@@ -35,4 +35,4 @@ sudo systemctl enable --now mqtt-dashboard
 
 Dafuer gibt es einen eigenen Installer mit Autostart, Firewall-Freigabe
 und mitgelieferten Bibliotheken - siehe **`INSTALL-BRUME2.md`**
-(kurz: Zip per `scp -O` nach `/tmp`, entpacken, `sh MQTT-Dashboard-MK3/install.sh`).
+(kurz: Zip per `scp -O` nach `/tmp`, entpacken, `sh MQTT-Dashboard-MK4/install.sh`).

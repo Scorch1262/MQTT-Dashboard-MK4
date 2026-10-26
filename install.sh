@@ -1,17 +1,18 @@
 #!/bin/sh
 # ======================================================================
-#  MQTT Dashboard (MK3) - Installer fuer GL.iNet Brume 2 (OpenWrt)
+#  MQTT Dashboard (MK4) - Installer fuer GL.iNet Brume 2 (OpenWrt)
 #
 #  Aufruf (im entpackten Ordner):   sh install.sh
 #
 #  Was passiert:
 #   1. Python 3 pruefen (nur wenn es fehlt: "opkg install python3",
 #      dafuer braucht der Brume 2 einmalig Internet)
-#   2. Programm nach /root/MQTT-Dashboard-MK3 kopieren
+#   2. Programm nach /root/MQTT-Dashboard-MK4 kopieren
 #      (vorhandene config.json bleibt erhalten = Update-faehig)
-#   3. alte v1.x-Konfiguration (mqtt_dashboard_config.json) uebernehmen
+#   3. fruehere Installation "MQTT-Dashboard-MK3" (v2.0.0/2.0.1) bzw. alte
+#      v1.x-Konfiguration (mqtt_dashboard_config.json) uebernehmen
 #   4. alte v1.x-Instanz auf demselben Port stoppen
-#   5. Autostart-Dienst /etc/init.d/mqtt-dashboard-mk3 einrichten + starten
+#   5. Autostart-Dienst /etc/init.d/mqtt-dashboard-mk4 einrichten + starten
 #   6. Firewall-Freigabe fuer den Port (auch ueber den WAN-Anschluss)
 #   7. Funktionstest + Ausgabe der Adresse
 #
@@ -19,15 +20,15 @@
 #  bei - dafuer ist KEIN Internet und kein pip noetig.
 #
 #  Optionen (Umgebungsvariablen):
-#   TARGET=/pfad      anderer Installationsordner (Standard /root/MQTT-Dashboard-MK3)
+#   TARGET=/pfad      anderer Installationsordner (Standard /root/MQTT-Dashboard-MK4)
 #   NO_FIREWALL=1     keine Firewall-Regel anlegen
 #   KEEP_OLD=1        alte v1.x-Instanz NICHT stoppen
 # ======================================================================
 
 set -u
 
-APP_NAME="MQTT-Dashboard-MK3"
-SERVICE="mqtt-dashboard-mk3"
+APP_NAME="MQTT-Dashboard-MK4"
+SERVICE="mqtt-dashboard-mk4"
 TARGET="${TARGET:-/root/$APP_NAME}"
 INIT="/etc/init.d/$SERVICE"
 SRC="$(cd "$(dirname "$0")" && pwd)"
@@ -39,7 +40,7 @@ warn() { printf '\033[1;35m  !!\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31mFEHLER:\033[0m %s\n' "$*"; exit 1; }
 
 echo ""
-echo "  MQTT Dashboard (MK3) - Installation auf dem Brume 2"
+echo "  MQTT Dashboard (MK4) - Installation auf dem Brume 2"
 echo "  ---------------------------------------------------"
 
 [ "$(id -u)" = "0" ] || die "Bitte als root ausfuehren (ssh root@<IP-des-Brume>)."
@@ -101,6 +102,33 @@ fi
 chmod +x "$TARGET/install.sh" "$TARGET/uninstall.sh" 2>/dev/null
 
 # ----------------------------------------------------------------------
+# 2b. fruehere Installation unter dem alten Namen "MQTT-Dashboard-MK3"
+#     (v2.0.0/v2.0.1) uebernehmen: Konfiguration kopieren, alten Dienst und
+#     alte Firewall-Regel entfernen. Der alte Ordner bleibt liegen.
+# ----------------------------------------------------------------------
+OLD_NAME="MQTT-Dashboard-MK3"
+OLD_DIR="/root/$OLD_NAME"
+OLD_INIT="/etc/init.d/mqtt-dashboard-mk3"
+if [ -f "$OLD_DIR/config.json" ] && [ ! -f "$TARGET/config.json" ] && [ "$OLD_DIR" != "$TARGET" ]; then
+    cp "$OLD_DIR/config.json" "$TARGET/config.json"
+    ok "Konfiguration aus $OLD_DIR uebernommen"
+fi
+if [ -f "$OLD_INIT" ]; then
+    "$OLD_INIT" stop >/dev/null 2>&1
+    "$OLD_INIT" disable >/dev/null 2>&1
+    rm -f "$OLD_INIT"
+    ok "alten Dienst $OLD_INIT entfernt (Ordner $OLD_DIR bleibt erhalten)"
+fi
+if command -v uci >/dev/null 2>&1; then
+    OIDX="$(uci show firewall 2>/dev/null | grep "\.name='$OLD_NAME'" | head -n 1 | cut -d. -f2)"
+    if [ -n "$OIDX" ]; then
+        uci delete "firewall.$OIDX"
+        uci commit firewall
+        ok "alte Firewall-Regel $OLD_NAME entfernt"
+    fi
+fi
+
+# ----------------------------------------------------------------------
 # 3. alte v1.x-Konfiguration uebernehmen
 # ----------------------------------------------------------------------
 if [ ! -f "$TARGET/config.json" ] && [ ! -f "$TARGET/mqtt_dashboard_config.json" ]; then
@@ -134,9 +162,9 @@ if [ "${KEEP_OLD:-0}" != "1" ]; then
         ok "alten Dienst $s gestoppt und deaktiviert (Dateien bleiben erhalten)"
     done
     if [ -f /etc/rc.local ] && grep -q "mqtt_dashboard" /etc/rc.local; then
-        cp /etc/rc.local /etc/rc.local.vor-mqtt-dashboard-mk3
+        cp /etc/rc.local /etc/rc.local.vor-mqtt-dashboard-mk4
         sed -i '/mqtt_dashboard/s/^\([^#]\)/# \1/' /etc/rc.local
-        ok "Autostart-Zeile in /etc/rc.local auskommentiert (Sicherung: /etc/rc.local.vor-mqtt-dashboard-mk3)"
+        ok "Autostart-Zeile in /etc/rc.local auskommentiert (Sicherung: /etc/rc.local.vor-mqtt-dashboard-mk4)"
     fi
     for pid in $(ps w | grep "[m]qtt_dashboard" | grep -v "$TARGET" | awk '{print $1}'); do
         kill "$pid" 2>/dev/null && ok "laufenden v1.x-Prozess $pid beendet"
@@ -157,7 +185,7 @@ fi
 say "Richte Autostart-Dienst $INIT ein ..."
 cat > "$INIT" <<EOF
 #!/bin/sh /etc/rc.common
-# MQTT Dashboard (MK3) - angelegt von install.sh
+# MQTT Dashboard (MK4) - angelegt von install.sh
 START=99
 STOP=10
 USE_PROCD=1

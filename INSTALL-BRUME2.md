@@ -7,9 +7,9 @@ der Zip bei, dafür ist **kein Internet** nötig.
 
 | | |
 |---|---|
-| Installationsordner | `/root/MQTT-Dashboard-MK3` |
-| Konfiguration | `/root/MQTT-Dashboard-MK3/config.json` |
-| Dienst (Autostart) | `/etc/init.d/mqtt-dashboard-mk3` |
+| Installationsordner | `/root/MQTT-Dashboard-MK4` |
+| Konfiguration | `/root/MQTT-Dashboard-MK4/config.json` |
+| Dienst (Autostart) | `/etc/init.d/mqtt-dashboard-mk4` |
 | Webseite | `http://<IP-des-Brume>:5001` |
 
 ---
@@ -30,7 +30,7 @@ Auf dem PC (Windows-PowerShell, macOS- oder Linux-Terminal) im Ordner
 mit der Zip-Datei:
 
 ```bash
-scp -O MQTT-Dashboard-MK3_v2.0.1.zip root@192.168.8.1:/tmp/
+scp -O MQTT-Dashboard-MK4_v2.0.2.zip root@192.168.8.1:/tmp/
 ```
 
 > `-O` ist wichtig: Neuere `scp`-Versionen nutzen sonst SFTP, das der
@@ -41,21 +41,21 @@ scp -O MQTT-Dashboard-MK3_v2.0.1.zip root@192.168.8.1:/tmp/
 
 ```bash
 ssh root@192.168.8.1
-cd /tmp && unzip -o MQTT-Dashboard-MK3_v2.0.1.zip && sh MQTT-Dashboard-MK3/install.sh
+cd /tmp && unzip -o MQTT-Dashboard-MK4_v2.0.2.zip && sh MQTT-Dashboard-MK4/install.sh
 ```
 
 Am Ende zeigt der Installer die Adresse(n) an, z. B.:
 
 ```
   ======================================================
-   MQTT Dashboard v2.0.1 laeuft.
+   MQTT Dashboard v2.0.2 laeuft.
   ======================================================
    http://192.168.8.1:5001
    http://192.168.178.40:5001
 ```
 
 Die Zip in `/tmp` kann danach bleiben – `/tmp` wird beim Neustart
-ohnehin geleert, das Programm liegt in `/root/MQTT-Dashboard-MK3`.
+ohnehin geleert, das Programm liegt in `/root/MQTT-Dashboard-MK4`.
 
 ## Schritt 3 – Einrichten
 
@@ -68,9 +68,13 @@ Brume 2: `127.0.0.1`), danach Diagramme, Schalter und Anzeigen anlegen.
 ## Was der Installer genau macht
 
 1. Prüft Python 3 (ab 3.9) und installiert es bei Bedarf per `opkg`.
-2. Kopiert das Programm nach `/root/MQTT-Dashboard-MK3`.
+2. Kopiert das Programm nach `/root/MQTT-Dashboard-MK4`.
    **Eine vorhandene `config.json` wird nie überschrieben.**
-3. Sucht eine alte v1.x-Konfiguration (`mqtt_dashboard_config.json`)
+3. Übernimmt eine frühere Installation unter dem alten Namen
+   `/root/MQTT-Dashboard-MK3` (v2.0.0/v2.0.1): `config.json` wird
+   kopiert, der alte Dienst `mqtt-dashboard-mk3` und dessen
+   Firewall-Regel werden entfernt, der alte Ordner bleibt liegen
+   (kann danach von Hand gelöscht werden). Andernfalls sucht er eine alte v1.x-Konfiguration (`mqtt_dashboard_config.json`)
    unter `/root`, `/opt`, `/srv` und übernimmt sie automatisch
    (Broker, Gruppen, Diagramme, Schalter, Anzeigen, virtuelle Topics).
 4. Stoppt eine alte v1.x-Instanz, die ebenfalls Port 5001 belegt:
@@ -79,7 +83,7 @@ Brume 2: `127.0.0.1`), danach Diagramme, Schalter und Anzeigen anlegen.
    Dateien bleiben liegen. Startskripte, die zusätzlich andere
    Programme starten, werden nicht angefasst – dann gibt es nur einen
    Hinweis. (Abschalten mit `KEEP_OLD=1 sh install.sh`.)
-5. Legt den Dienst `/etc/init.d/mqtt-dashboard-mk3` an (procd, startet
+5. Legt den Dienst `/etc/init.d/mqtt-dashboard-mk4` an (procd, startet
    nach jedem Neustart und nach einem Absturz automatisch neu).
 6. Gibt den Port in der Firewall frei – auch über den WAN-Anschluss,
    damit das Dashboard erreichbar ist, wenn der Brume 2 über WAN im
@@ -89,16 +93,16 @@ Brume 2: `127.0.0.1`), danach Diagramme, Schalter und Anzeigen anlegen.
 ## Update auf eine neue Version
 
 Genau wie die Erstinstallation: neue Zip kopieren, entpacken,
-`sh MQTT-Dashboard-MK3/install.sh`. Einstellungen bleiben erhalten.
+`sh MQTT-Dashboard-MK4/install.sh`. Einstellungen bleiben erhalten.
 
 ## Nützliche Befehle
 
 ```bash
-/etc/init.d/mqtt-dashboard-mk3 restart     # neu starten (z. B. nach Portwechsel)
-/etc/init.d/mqtt-dashboard-mk3 stop        # anhalten
+/etc/init.d/mqtt-dashboard-mk4 restart     # neu starten (z. B. nach Portwechsel)
+/etc/init.d/mqtt-dashboard-mk4 stop        # anhalten
 logread | grep python3 | tail -n 40        # Protokoll
-sh /root/MQTT-Dashboard-MK3/uninstall.sh   # Dienst entfernen (Ordner bleibt)
-sh /root/MQTT-Dashboard-MK3/uninstall.sh --all   # alles entfernen
+sh /root/MQTT-Dashboard-MK4/uninstall.sh   # Dienst entfernen (Ordner bleibt)
+sh /root/MQTT-Dashboard-MK4/uninstall.sh --all   # alles entfernen
 ```
 
 ## Probleme
@@ -108,5 +112,5 @@ sh /root/MQTT-Dashboard-MK3/uninstall.sh --all   # alles entfernen
 | `sftp-server: not found` beim Kopieren | `scp -O …` verwenden (siehe Schritt 1) |
 | `unzip: not found` | `opkg update && opkg install unzip` (braucht Internet) |
 | `opkg update fehlgeschlagen` | Python fehlt und der Brume 2 hat kein Internet – kurz mit dem Internet verbinden und `install.sh` erneut starten |
-| `Port 5001 ist noch belegt` | anderes Programm nutzt 5001 → in `config.json` unter `server.port` einen freien Port eintragen, dann `/etc/init.d/mqtt-dashboard-mk3 restart` und `sh /root/MQTT-Dashboard-MK3/install.sh` (passt die Firewall-Freigabe an) |
-| Webseite nicht erreichbar | Protokoll ansehen (siehe oben); manuell testen mit `PYTHONPATH=/root/MQTT-Dashboard-MK3/vendor python3 /root/MQTT-Dashboard-MK3/app.py` |
+| `Port 5001 ist noch belegt` | anderes Programm nutzt 5001 → in `config.json` unter `server.port` einen freien Port eintragen, dann `/etc/init.d/mqtt-dashboard-mk4 restart` und `sh /root/MQTT-Dashboard-MK4/install.sh` (passt die Firewall-Freigabe an) |
+| Webseite nicht erreichbar | Protokoll ansehen (siehe oben); manuell testen mit `PYTHONPATH=/root/MQTT-Dashboard-MK4/vendor python3 /root/MQTT-Dashboard-MK4/app.py` |

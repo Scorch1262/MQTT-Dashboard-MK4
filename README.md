@@ -1,4 +1,4 @@
-# MQTT Dashboard (MK3) – v2
+# MQTT Dashboard (MK4) – v2
 
 Lokales Web-Dashboard für MQTT-Topics im eigenen Netzwerk: **Diagramme**,
 **Schalter**, **Slider** und **Anzeigen**, frei in **Gruppen** sortierbar,
@@ -78,7 +78,7 @@ pyinstaller --onefile --name MQTTDashboard --console app.py
 paho-mqtt **1.6.x und 2.x** werden beide unterstützt.
 
 **GL.iNet Brume 2:** Zip per `scp -O` nach `/tmp` kopieren, entpacken,
-`sh MQTT-Dashboard-MK3/install.sh` – alles Weitere (Python, Autostart,
+`sh MQTT-Dashboard-MK4/install.sh` – alles Weitere (Python, Autostart,
 Firewall, Übernahme der v1.x-Konfiguration) erledigt der Installer.
 Details: **`INSTALL-BRUME2.md`**. Sonstiges Linux: `LINUX-INSTALL.md`.
 Der Ordner `vendor/` enthält Flask und paho-mqtt als reine

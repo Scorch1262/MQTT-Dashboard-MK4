@@ -1,11 +1,11 @@
 #!/bin/sh
-# MQTT Dashboard (MK3) - Deinstallation auf dem GL.iNet Brume 2
+# MQTT Dashboard (MK4) - Deinstallation auf dem GL.iNet Brume 2
 #
 #   sh uninstall.sh          Dienst + Firewall-Regel entfernen, Ordner bleibt
 #   sh uninstall.sh --all    zusaetzlich den Programmordner samt config.json loeschen
 
-APP_NAME="MQTT-Dashboard-MK3"
-INIT="/etc/init.d/mqtt-dashboard-mk3"
+APP_NAME="MQTT-Dashboard-MK4"
+INIT="/etc/init.d/mqtt-dashboard-mk4"
 TARGET="${TARGET:-/root/$APP_NAME}"
 
 if [ -x "$INIT" ]; then

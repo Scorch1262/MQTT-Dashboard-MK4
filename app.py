@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-MQTT Dashboard (MK3) - v2
+MQTT Dashboard (MK4) - v2
 =========================
 
 Lokales Web-Dashboard fuer MQTT-Topics: Diagramme, Schalter, Slider und
@@ -27,7 +27,7 @@ Versionierung: APP_VERSION ist die einzige Quelle der Wahrheit - der
 GitHub-Actions-Workflow liest sie aus und benennt Release/Tag danach.
 """
 
-APP_VERSION = "2.0.1"
+APP_VERSION = "2.0.2"
 
 import os
 import sys
