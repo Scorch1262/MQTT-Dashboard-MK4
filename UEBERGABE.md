@@ -63,6 +63,18 @@ Eine Datei `app.py`, Aufbau von oben nach unten:
 
 ## Versionshistorie
 
+### v2.0.1
+- Installer `install.sh`/`uninstall.sh` für GL.iNet Brume 2 (OpenWrt):
+  Python per opkg nur falls nötig, Kopie nach `/root/MQTT-Dashboard-MK3`,
+  Übernahme einer v1.x-Konfiguration, Abschalten einer alten v1.x-Instanz
+  auf Port 5001, procd-Dienst `mqtt-dashboard-mk3`, Firewall-Regel,
+  Funktionstest. Anleitung: `INSTALL-BRUME2.md`.
+- `vendor/`: Flask 3.1, Werkzeug, Jinja2, MarkupSafe (ohne C-Erweiterung),
+  itsdangerous, click 8.1 (letzte Version für Python 3.9), blinker,
+  importlib-metadata/zipp, paho-mqtt 2.1 - alles reine Python-Pakete,
+  kompatibel ab Python 3.9 (OpenWrt 21.02 auf dem Brume 2).
+- `app.py` nimmt `vendor/` automatisch in den Suchpfad auf (nicht in der exe).
+
 ### v2.0.0
 - Komplett überarbeitet im Design des Drucker Dashboards MK6.
 - Ansicht und Einstellungen getrennt; alle Diagramme, Elemente, Gruppen

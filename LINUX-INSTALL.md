@@ -31,34 +31,8 @@ WantedBy=multi-user.target
 sudo systemctl enable --now mqtt-dashboard
 ```
 
-## OpenWrt (GL.iNet Brume 2 u. a.)
+## OpenWrt / GL.iNet Brume 2
 
-```sh
-opkg update
-opkg install python3 python3-pip
-pip3 install flask paho-mqtt
-mkdir -p /root/MQTT-Dashboard-MK3 && cd /root/MQTT-Dashboard-MK3
-# app.py hierher kopieren (z. B. per scp), dann:
-python3 app.py
-```
-
-Autostart (`/etc/init.d/mqtt-dashboard`, danach `chmod +x` und
-`/etc/init.d/mqtt-dashboard enable && /etc/init.d/mqtt-dashboard start`):
-
-```sh
-#!/bin/sh /etc/rc.common
-START=99
-USE_PROCD=1
-
-start_service() {
-    procd_open_instance
-    procd_set_param command /usr/bin/python3 /root/MQTT-Dashboard-MK3/app.py
-    procd_set_param respawn
-    procd_set_param stdout 1
-    procd_set_param stderr 1
-    procd_close_instance
-}
-```
-
-`config.json` liegt danach in `/root/MQTT-Dashboard-MK3/`. Läuft auf
-demselben Gerät ein Mosquitto, als Broker `127.0.0.1` eintragen.
+Dafuer gibt es einen eigenen Installer mit Autostart, Firewall-Freigabe
+und mitgelieferten Bibliotheken - siehe **`INSTALL-BRUME2.md`**
+(kurz: Zip per `scp -O` nach `/tmp`, entpacken, `sh MQTT-Dashboard-MK3/install.sh`).

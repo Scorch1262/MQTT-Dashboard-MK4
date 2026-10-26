@@ -27,7 +27,7 @@ Versionierung: APP_VERSION ist die einzige Quelle der Wahrheit - der
 GitHub-Actions-Workflow liest sie aus und benennt Release/Tag danach.
 """
 
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.0.1"
 
 import os
 import sys
@@ -41,6 +41,14 @@ import socket
 import colorsys
 import threading
 from collections import deque
+
+# v2.0.1: mitgelieferte Python-Bibliotheken (Ordner "vendor" neben app.py,
+# z. B. fuer die Offline-Installation auf dem GL.iNet Brume 2 per
+# install.sh). Fehlt der Ordner oder laeuft die gebaute exe, wird ganz
+# normal aus den installierten Paketen geladen.
+_VENDOR_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor")
+if not getattr(sys, "frozen", False) and os.path.isdir(_VENDOR_DIR):
+    sys.path.insert(0, _VENDOR_DIR)
 
 from flask import Flask, Response, jsonify, request
 import paho.mqtt.client as mqtt
