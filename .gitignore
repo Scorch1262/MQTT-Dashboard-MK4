@@ -1,0 +1,22 @@
+# Von jedem Nutzer lokal erzeugt - enthaelt Broker-Adresse und ggf. Passwort
+config.json
+config.json.tmp
+config.json.defekt-*
+mqtt_dashboard_config.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# PyInstaller-Buildartefakte
+build/
+dist/
+*.spec
+*.exe
+
+# Editor/OS
+.DS_Store
+.vscode/
+.idea/

@@ -1,0 +1,43 @@
+{
+  "server": { "host": "0.0.0.0", "port": 5001 },
+  "title": "MQTT Dashboard",
+  "default_range_h": 24,
+  "broker": { "host": "192.168.1.5", "port": 1883, "username": "", "password": "", "client_id": "" },
+  "groups": [
+    { "id": "grp_wohnzimmer", "name": "Wohnzimmer", "color": "#ff9142", "order": 0 }
+  ],
+  "charts": [
+    {
+      "id": "chart_temp", "name": "Temperaturen", "group_id": "grp_wohnzimmer",
+      "series": [
+        { "topic": "wohnzimmer/temperatur", "label": "Innen", "color": "#ff9142" },
+        { "topic": "aussen/temperatur", "label": "Aussen", "color": "#4aa3ff" }
+      ],
+      "unit": "°C", "y_min": null, "y_max": null, "height": "m",
+      "stepped": false, "fill": false, "range_h": null, "order": 0
+    }
+  ],
+  "widgets": [
+    {
+      "id": "w_lampe", "type": "switch", "name": "Stehlampe", "topic": "stat/lampe/POWER",
+      "command_topic": "cmnd/lampe/POWER", "payload_on": "ON", "payload_off": "OFF",
+      "device": "lamp", "group_id": "grp_wohnzimmer", "unit": "", "retain": false, "order": 0
+    },
+    {
+      "id": "w_dimmer", "type": "slider", "name": "Dimmer", "topic": "wohnzimmer/dimmer",
+      "command_topic": "", "min": 0, "max": 100, "step": 5,
+      "device": "lamp", "group_id": "grp_wohnzimmer", "unit": "%", "retain": false, "order": 1
+    },
+    {
+      "id": "w_feuchte", "type": "display", "name": "Luftfeuchte", "topic": "wohnzimmer/feuchte",
+      "payload_on": "", "decimals": 0, "device": "water", "group_id": "grp_wohnzimmer", "unit": "%", "order": 2
+    }
+  ],
+  "virtual_topics": [
+    {
+      "id": "vt_netz", "name": "virtual/netzbezug",
+      "sources": ["haus/pv/leistung", "haus/verbrauch"],
+      "formula": "max(0, b - a)", "unit": "W", "order": 0
+    }
+  ]
+}
