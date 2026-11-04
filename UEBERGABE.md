@@ -13,7 +13,7 @@ Eine Datei `app.py`, Aufbau von oben nach unten:
 | Validierung | `validate_group/_chart/_widget/_virtual` – einzige Stelle, an der Eingaben geprüft werden |
 | `migrate_legacy()` | Umwandlung v1.x-`mqtt_dashboard_config.json` → v2-`config.json` |
 | `ConfigStore` | Laden/Normalisieren/atomares Speichern (`.tmp` + `os.replace`), defekte Datei wird als `config.json.defekt-<ts>` gesichert |
-| `TopicStore` | Werte + Verlauf im Speicher (Deque je Topic, 1 Punkt/s, 49 h, 20 000 Punkte), min/max-Ausdünnung |
+| `TopicStore`, `_Series` | Werte + Verlauf im Speicher, je Topic drei Zeitstufen: letzte Stunde jeder Punkt (max. 1/s), bis 12 h min/max je 15 s, bis 49 h min/max je 60 s (`_compact_into()`); Verdichtung beim Schreiben alle 10 s und per Hintergrund-Thread jede Minute |
 | `VirtualEngine` | berechnet virtuelle Topics bei Änderung einer Quelle (bis Tiefe 3, virtuell auf virtuell möglich) |
 | `MqttManager` | paho-Client mit `loop_start`, Auto-Reconnect, Neustart bei Broker-Änderung; 1.6.x und 2.x kompatibel |
 | REST-API | siehe unten |
@@ -62,6 +62,17 @@ Eine Datei `app.py`, Aufbau von oben nach unten:
   weiter funktionieren; jetzt in den Einstellungen änderbar.
 
 ## Versionshistorie
+
+### v2.0.3
+- Fehler behoben: In der 24h-/48h-Ansicht endete die Linie mancher Diagramme
+  mitten in der Anzeige. Ursache: max. 20 000 gespeicherte Punkte je Topic -
+  bei einem Wert pro Sekunde reichte das nur ~5,5 h (bei 2 s ~11 h usw.).
+  Jetzt zeitlich gestaffelter Speicher (`_Series`), der immer volle 49 h
+  abdeckt und dabei sogar weniger Speicher braucht (max. ~13 300 Punkte je
+  1-Hz-Topic statt 20 000).
+- Browser: `trimData()` hat ältere Punkte bei jedem Abruf erneut halbiert
+  (bei lange offener Seite wurden ältere Abschnitte immer lückenhafter).
+  Ersetzt durch stabile zeitbasierte min/max-Verdichtung (`compactSeries()`).
 
 ### v2.0.2
 - Projektname korrigiert: **MQTT-Dashboard-MK4** (vorher fälschlich MK3).

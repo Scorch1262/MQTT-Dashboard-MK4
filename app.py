@@ -27,7 +27,7 @@ Versionierung: APP_VERSION ist die einzige Quelle der Wahrheit - der
 GitHub-Actions-Workflow liest sie aus und benennt Release/Tag danach.
 """
 
-APP_VERSION = "2.0.2"
+APP_VERSION = "2.0.3"
 
 import os
 import sys
@@ -74,8 +74,20 @@ LEGACY_CONFIG_PATH = os.path.join(base_dir(), "mqtt_dashboard_config.json")
 RANGE_CHOICES_H = [1, 6, 12, 24, 48]
 MAX_RANGE_H = 48
 RETAIN_MS = (MAX_RANGE_H + 1) * 3600 * 1000
-MAX_POINTS_PER_TOPIC = 20000      # wie v1.9
 STORE_MIN_INTERVAL_MS = 1000      # max. 1 gespeicherter Messpunkt/s je Topic (wie v1.9)
+# v2.0.3: Verlauf zeitlich gestaffelt statt fester Punktzahl. Bis v2.0.2 galt
+# max. 20 000 Punkte je Topic - bei 1 Wert/s reichte das nur ~5,5 h, in der
+# 24h-/48h-Ansicht brach die Linie deshalb mitten im Diagramm ab.
+#   letzte Stunde ........ jeder Punkt (max. 1/s)
+#   1 h bis 12 h ......... min + max je 15 s
+#   12 h bis 49 h ........ min + max je 60 s
+# Bei 1 Wert/s sind das max. ~13 300 Punkte je Topic fuer volle 49 h; Spitzen
+# bleiben durch min/max erhalten.
+RAW_KEEP_MS = 3600 * 1000
+MID_KEEP_MS = 12 * 3600 * 1000
+MID_BUCKET_MS = 15 * 1000
+COARSE_BUCKET_MS = 60 * 1000
+COMPACT_EVERY_MS = 10 * 1000
 MAX_SEND_POINTS = 1500            # max. Punkte je Topic beim Erstabruf
 VAR_NAMES = "abcdefgh"            # Variablen fuer virtuelle Topics (v1.9: a-f)
 SELF_PUBLISH_WINDOW_S = 5.0
@@ -571,11 +583,89 @@ def _decimate_minmax(points, max_points):
     return out
 
 
+class _Series:
+    """Verlauf eines Topics in drei Zeitstufen (alt -> neu: coarse, mid, raw)."""
+    __slots__ = ("raw", "mid", "coarse", "last_compact")
+
+    def __init__(self):
+        self.raw = deque()
+        self.mid = deque()
+        self.coarse = deque()
+        self.last_compact = 0
+
+    def all_points(self):
+        return list(self.coarse) + list(self.mid) + list(self.raw)
+
+    def newest_ts(self):
+        for d in (self.raw, self.mid, self.coarse):
+            if d:
+                return d[-1][0]
+        return None
+
+    def empty(self):
+        return not (self.raw or self.mid or self.coarse)
+
+
+def _compact_into(src, dst, cutoff, bucket_ms):
+    """Verschiebt alle Punkte aus src mit ts < cutoff nach dst, je Zeitabschnitt
+    nur Minimum und Maximum (zeitlich sortiert). cutoff liegt auf einer
+    Abschnittsgrenze, angebrochene Abschnitte bleiben also unangetastet."""
+    cur = None
+    mn = mx = None
+
+    def flush():
+        if mn is None:
+            return
+        if mn is mx or mn[1] == mx[1]:
+            dst.append(mn)
+        elif mn[0] <= mx[0]:
+            dst.append(mn)
+            dst.append(mx)
+        else:
+            dst.append(mx)
+            dst.append(mn)
+
+    while src and src[0][0] < cutoff:
+        p = src.popleft()
+        bkt = p[0] // bucket_ms
+        if bkt != cur:
+            flush()
+            cur, mn, mx = bkt, p, p
+        else:
+            if p[1] < mn[1]:
+                mn = p
+            if p[1] > mx[1]:
+                mx = p
+    flush()
+
+
 class TopicStore:
     def __init__(self):
         self.lock = threading.Lock()
-        self.data = {}    # topic -> deque[(ts_ms, float)]
+        self.data = {}    # topic -> _Series
         self.state = {}   # topic -> {value, numeric, ts, source}
+
+    @staticmethod
+    def _compact_series(ser, now):
+        _compact_into(ser.raw, ser.mid, ((now - RAW_KEEP_MS) // MID_BUCKET_MS) * MID_BUCKET_MS, MID_BUCKET_MS)
+        _compact_into(ser.mid, ser.coarse, ((now - MID_KEEP_MS) // COARSE_BUCKET_MS) * COARSE_BUCKET_MS,
+                      COARSE_BUCKET_MS)
+        cutoff = now - RETAIN_MS
+        for d in (ser.coarse, ser.mid, ser.raw):
+            while d and d[0][0] < cutoff:
+                d.popleft()
+        ser.last_compact = now
+
+    def compact_all(self):
+        """Regelmaessig aufgerufen (Hintergrund-Thread), damit auch Topics, die
+        nichts mehr senden, verdichtet und nach 49 h verworfen werden."""
+        with self.lock:
+            now = now_ms()
+            for t in list(self.data):
+                ser = self.data[t]
+                self._compact_series(ser, now)
+                if ser.empty():
+                    del self.data[t]
 
     @staticmethod
     def parse_numeric(payload: str):
@@ -595,14 +685,14 @@ class TopicStore:
             ts = now_ms()  # bewusst INNERHALB der Sperre, siehe live_since()
             self.state[topic] = {"value": payload, "numeric": numeric, "ts": ts, "source": source}
             if numeric is not None:
-                d = self.data.get(topic)
-                if d is None:
-                    d = self.data[topic] = deque(maxlen=MAX_POINTS_PER_TOPIC)
-                if not d or ts - d[-1][0] >= STORE_MIN_INTERVAL_MS:
-                    d.append((ts, numeric))
-                cutoff = ts - RETAIN_MS
-                while d and d[0][0] < cutoff:
-                    d.popleft()
+                ser = self.data.get(topic)
+                if ser is None:
+                    ser = self.data[topic] = _Series()
+                last = ser.newest_ts()
+                if last is None or ts - last >= STORE_MIN_INTERVAL_MS:
+                    ser.raw.append((ts, numeric))
+                if ts - ser.last_compact >= COMPACT_EVERY_MS:
+                    self._compact_series(ser, ts)
         return numeric
 
     def latest_numeric(self, topic):
@@ -624,11 +714,11 @@ class TopicStore:
         with self.lock:
             now = now_ms()
             for t in topics:
-                d = self.data.get(t)
-                if not d:
+                ser = self.data.get(t)
+                if ser is None or ser.empty():
                     out[t] = []
                     continue
-                seq = list(d)
+                seq = ser.all_points()
                 i = _bisect_ts(seq, since)
                 # einen Punkt vor dem Fenster mitliefern (Linie beginnt am linken Rand)
                 pts = seq[max(0, i - 1):]
@@ -640,10 +730,12 @@ class TopicStore:
         with self.lock:
             now = now_ms()
             for t in topics:
-                d = self.data.get(t)
-                if not d or d[-1][0] <= since:
+                ser = self.data.get(t)
+                newest = ser.newest_ts() if ser is not None else None
+                if newest is None or newest <= since:
                     continue
-                seq = list(d)
+                # Normalfall: nur die letzten Sekunden -> genuegt die feinste Stufe
+                seq = list(ser.raw) if ser.raw and ser.raw[0][0] <= since else ser.all_points()
                 i = _bisect_ts(seq, since + 1)
                 pts = seq[i:]
                 if pts:
@@ -2374,17 +2466,36 @@ function loadHistory(){
   });
 }
 function mergeStates(states){ for(var t in states){ if(states.hasOwnProperty(t)) APP.states[t] = states[t]; } }
+/* v2.0.3: Ausduennen im Browser zeitbasiert (min/max je Zeitabschnitt) statt
+   wie bisher wiederholt jede zweite aeltere Messung zu verwerfen - das hat
+   bei lange offenen Seiten die aelteren Abschnitte immer weiter ausgeduennt.
+   Das Verfahren ist stabil: bereits verdichtete Abschnitte bleiben gleich. */
+function compactSeries(d, olderThan, bucketMs){
+  var cut = bisect(d.x, olderThan);
+  if(cut < 2) return;
+  var nx = [], ny = [], cur = null, mn = -1, mx = -1;
+  function flush(){
+    if(mn < 0) return;
+    var a = Math.min(mn, mx), b = Math.max(mn, mx);
+    nx.push(d.x[a]); ny.push(d.y[a]);
+    if(b !== a && d.y[b] !== d.y[a]){ nx.push(d.x[b]); ny.push(d.y[b]); }
+  }
+  for(var i = 0; i < cut; i++){
+    var bk = Math.floor(d.x[i] / bucketMs);
+    if(bk !== cur){ flush(); cur = bk; mn = mx = i; }
+    else { if(d.y[i] < d.y[mn]) mn = i; if(d.y[i] > d.y[mx]) mx = i; }
+  }
+  flush();
+  d.x = nx.concat(d.x.slice(cut)); d.y = ny.concat(d.y.slice(cut));
+}
 function trimData(){
-  var cutoff = serverNow() - APP.fetchedRangeMs - 60000;
+  var now = serverNow(), cutoff = now - APP.fetchedRangeMs - 60000;
+  var bucketMs = Math.max(15000, Math.round(APP.fetchedRangeMs / 2000));
   for(var t in APP.data){
     if(!APP.data.hasOwnProperty(t)) continue;
     var d = APP.data[t], k = bisect(d.x, cutoff);
     if(k > 1){ d.x = d.x.slice(k - 1); d.y = d.y.slice(k - 1); }
-    if(d.x.length > 6000){       /* aeltere Haelfte ausduennen, juengste Werte bleiben exakt */
-      var keep = 1000, nx = [], ny = [], cut = d.x.length - keep;
-      for(var i = 0; i < cut; i += 2){ nx.push(d.x[i]); ny.push(d.y[i]); }
-      d.x = nx.concat(d.x.slice(cut)); d.y = ny.concat(d.y.slice(cut));
-    }
+    if(d.x.length > 6000) compactSeries(d, now - 3600000, bucketMs);
   }
 }
 function poll(){
@@ -2978,6 +3089,16 @@ def main():
     host = cfg["server"].get("host", "0.0.0.0")
     port = int(cfg["server"].get("port", 5001))
     virtual.rebuild(cfg)
+
+    def _compactor():
+        while True:
+            time.sleep(60)
+            try:
+                store.compact_all()
+            except Exception as e:
+                print("[Verlauf] Fehler beim Verdichten:", e)
+
+    threading.Thread(target=_compactor, name="verlauf-verdichten", daemon=True).start()
     mqtt_manager.start(cfg["broker"])
     print("MQTT Dashboard v%s" % APP_VERSION)
     print("Konfiguration: %s" % CONFIG_PATH)

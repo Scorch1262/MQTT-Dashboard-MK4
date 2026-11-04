@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>
+  :root{ --bg:#0a0c0f; --panel:#12151a; --panel2:#171b21; --border:#242a33; --text:#e5e8ec; --dim:#8891a0;
+         --accent:#ff9142; --green:#3ddc97; --blue:#4aa3ff; --red:#ff5d5d;
+         --mono:'DejaVu Sans Mono','Consolas',monospace; --sans:'Inter','DejaVu Sans','Segoe UI',sans-serif; }
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  body{ width:1280px; height:420px; background:var(--bg); overflow:hidden; font-family:var(--sans); color:var(--text); }
+  .stage{ position:relative; width:1280px; height:420px; overflow:hidden;
+    background:
+      radial-gradient(ellipse 520px 300px at 92% 8%, rgba(255,145,66,.16), transparent 70%),
+      radial-gradient(ellipse 420px 260px at 8% 110%, rgba(61,220,151,.10), transparent 70%),
+      linear-gradient(180deg,#0d1014,#0a0c0f); }
+  .grid{ position:absolute; inset:0;
+    background-image:linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px);
+    background-size:32px 32px; mask-image:linear-gradient(90deg, #000 0%, rgba(0,0,0,.25) 55%, #000 100%); }
+  .left{ position:absolute; left:64px; top:70px; width:560px; }
+  .kicker{ font-family:var(--mono); font-size:13px; letter-spacing:2px; color:var(--dim); text-transform:uppercase; display:flex; align-items:center; gap:10px; }
+  .dot{ width:9px; height:9px; border-radius:50%; background:var(--green); box-shadow:0 0 8px var(--green); }
+  h1{ margin-top:18px; font-size:58px; font-weight:700; letter-spacing:1px; text-transform:uppercase; line-height:1; white-space:nowrap; }
+  h1 span{ color:var(--accent); }
+  h1 em{ font-style:normal; font-family:var(--mono); font-size:22px; font-weight:600; color:#12100c; background:var(--accent);
+    padding:4px 10px; border-radius:6px; vertical-align:middle; position:relative; top:-8px; margin-left:12px; letter-spacing:0; }
+  .tag{ margin-top:22px; font-size:19px; color:#c3c9d2; line-height:1.45; }
+  .chips{ margin-top:30px; display:flex; flex-wrap:wrap; gap:10px; }
+  .chip{ font-family:var(--mono); font-size:12.5px; color:var(--dim); border:1px solid var(--border); background:#11151a; border-radius:20px; padding:7px 14px; }
+  .chip b{ color:var(--text); font-weight:600; }
+
+  .mock{ position:absolute; right:-6px; top:46px; width:640px; height:360px; transform:perspective(1400px) rotateY(-11deg) rotateX(4deg);
+    transform-origin:right center; }
+  .card{ background:var(--panel); border:1px solid var(--border); border-radius:12px; overflow:hidden; box-shadow:0 30px 60px rgba(0,0,0,.55); }
+  .tiles{ display:flex; gap:12px; margin-bottom:14px; }
+  .tile{ flex:1; height:96px; border-radius:10px; background:var(--panel); border:1px solid var(--border); display:flex; flex-direction:column;
+    align-items:center; justify-content:center; position:relative; box-shadow:0 18px 40px rgba(0,0,0,.45); }
+  .tile .ic{ width:26px; height:26px; }
+  .tile .n{ font-size:11px; font-weight:600; margin-top:6px; }
+  .tile .v{ font-family:var(--mono); font-size:12px; color:var(--dim); margin-top:2px; }
+  .tile.on{ border-color:#f5c518; background:rgba(245,197,24,.14); }
+  .tile.on .v{ color:var(--text); }
+  .badge{ position:absolute; right:8px; top:7px; font-family:var(--mono); font-size:9px; padding:1px 7px; border-radius:20px; background:#f5c518; color:#12100c; }
+  .tile .big{ font-family:var(--mono); font-size:20px; font-weight:700; color:var(--text); margin-top:3px; }
+  .tile .big small{ font-size:11px; color:var(--dim); font-weight:400; margin-left:3px; }
+  .rng{ width:70%; height:5px; border-radius:3px; background:#20252c; margin-top:9px; position:relative; }
+  .rng i{ position:absolute; left:0; top:0; height:100%; width:62%; background:var(--accent); border-radius:3px; }
+  .rng b{ position:absolute; left:62%; top:50%; width:14px; height:14px; margin:-7px 0 0 -7px; border-radius:50%; background:var(--accent); }
+  .head{ display:flex; justify-content:space-between; align-items:center; padding:11px 16px; background:var(--panel2); border-bottom:1px solid var(--border); }
+  .head .t{ font-size:13px; font-weight:600; }
+  .pill{ font-family:var(--mono); font-size:9.5px; color:var(--dim); border:1px solid var(--border); border-radius:20px; padding:2px 8px; margin-left:8px; }
+  .seg{ display:flex; border:1px solid var(--border); border-radius:5px; overflow:hidden; }
+  .seg span{ font-family:var(--mono); font-size:9.5px; padding:4px 7px; color:var(--dim); background:#1b2027; border-right:1px solid var(--border); }
+  .seg span:last-child{ border-right:none; }
+  .seg span.a{ background:var(--accent); color:#12100c; font-weight:700; }
+  .legend{ display:flex; gap:7px; padding:9px 12px 0; }
+  .lg{ font-family:var(--mono); font-size:10px; color:var(--dim); background:#1b2027; border:1px solid var(--border); border-radius:5px; padding:4px 8px; display:flex; align-items:center; gap:6px; }
+  .lg i{ width:8px; height:8px; border-radius:2px; }
+  .lg b{ color:var(--text); }
+  svg{ display:block; }
+</style></head>
+<body><div class="stage">
+  <div class="grid"></div>
+
+  <div class="left">
+    <div class="kicker"><span class="dot"></span> Lokal &middot; ohne Cloud &middot; ohne Account</div>
+    <h1>MQTT<span>Dashboard</span><em>MK4</em></h1>
+    <div class="tag">Diagramme, Schalter, Slider und Anzeigen<br>f&uuml;r deine MQTT-Topics &ndash; einmal angelegt,<br>jederzeit bearbeitbar.</div>
+    <div class="chips">
+      <span class="chip"><b>Ansicht</b> &amp; <b>Einstellungen</b></span>
+      <span class="chip">Virtuelle Topics</span>
+      <span class="chip">Windows &middot; macOS &middot; GL.iNet Brume 2</span>
+    </div>
+  </div>
+
+  <div class="mock">
+    <div class="tiles">
+      <div class="tile on"><span class="badge">AN</span>
+        <svg class="ic" viewBox="0 0 24 24"><path d="M9 21h6v-1.5H9V21zm3-19a7 7 0 0 0-4 12.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26A7 7 0 0 0 12 2z" fill="#f5c518"/></svg>
+        <div class="n">Stehlampe</div><div class="v">AN</div></div>
+      <div class="tile">
+        <svg class="ic" viewBox="0 0 24 24"><g stroke="#ff9142" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 17h16"/></g><circle cx="9" cy="7" r="2.6" fill="#12151a" stroke="#ff9142" stroke-width="2"/><circle cx="15" cy="17" r="2.6" fill="#12151a" stroke="#ff9142" stroke-width="2"/></svg>
+        <div class="n">Dimmer</div><div class="rng"><i></i><b></b></div></div>
+      <div class="tile">
+        <svg class="ic" viewBox="0 0 24 24"><path d="M12 3s-6 7-6 11a6 6 0 0 0 12 0c0-4-6-11-6-11z" fill="#4aa3ff" opacity=".9"/></svg>
+        <div class="n">Luftfeuchte</div><div class="big">48<small>%</small></div></div>
+      <div class="tile">
+        <svg class="ic" viewBox="0 0 24 24"><path d="M10 4a2 2 0 0 1 4 0v9.3a4 4 0 1 1-4 0z" fill="none" stroke="#ff5d5d" stroke-width="2"/><circle cx="12" cy="17" r="2.2" fill="#ff5d5d"/><path d="M12 9v6" stroke="#ff5d5d" stroke-width="2"/></svg>
+        <div class="n">Au&szlig;en</div><div class="big">11,6<small>&deg;C</small></div></div>
+    </div>
+
+    <div class="card">
+      <div class="head"><div><span class="t">Energie</span><span class="pill">W</span></div>
+        <div class="seg"><span>1h</span><span>6h</span><span>12h</span><span class="a">24h</span><span>48h</span></div></div>
+      <div class="legend">
+        <span class="lg"><i style="background:#e8b23d"></i>PV <b id="l1"></b></span>
+        <span class="lg"><i style="background:#ff5d5d"></i>Verbrauch <b id="l2"></b></span>
+        <span class="lg"><i style="background:#3ddc97"></i>Einspeisung <b id="l3"></b></span>
+      </div>
+      <svg width="640" height="196" viewBox="0 0 640 196" id="chart"></svg>
+    </div>
+  </div>
+</div>
+<script>
+  // Diagrammlinien deterministisch erzeugen (kein Zufall -> reproduzierbares Bild)
+  var svg = document.getElementById('chart'), W = 640, H = 196, L = 40, R = 14, T = 12, B = 26;
+  var pw = W - L - R, ph = H - T - B, max = 4000, n = 160, ns = 'http://www.w3.org/2000/svg';
+  function el(tag, a){ var e = document.createElementNS(ns, tag); for (var k in a) e.setAttribute(k, a[k]); svg.appendChild(e); return e; }
+  [0,1000,2000,3000,4000].forEach(function(v){
+    var y = T + ph - v / max * ph;
+    el('line', {x1:L, x2:L+pw, y1:y, y2:y, stroke:'#242a33', 'stroke-width':1});
+    var t = el('text', {x:L-7, y:y+3, 'text-anchor':'end', fill:'#8891a0', 'font-size':9, 'font-family':'DejaVu Sans Mono, monospace'}); t.textContent = v;
+  });
+  ['08:00','12:00','16:00','20:00','00:00','04:00'].forEach(function(s,i){
+    var x = L + (i + 0.5) / 6 * pw;
+    el('line', {x1:x, x2:x, y1:T, y2:T+ph, stroke:'#242a33', 'stroke-width':1});
+    var t = el('text', {x:x, y:H-9, 'text-anchor':'middle', fill:'#8891a0', 'font-size':9, 'font-family':'DejaVu Sans Mono, monospace'}); t.textContent = s;
+  });
+  function noise(i, s){ return Math.sin(i * 12.9898 + s) * 43758.5453 % 1; }
+  var pv = [], cons = [];
+  for (var i = 0; i < n; i++){
+    var h = i / (n - 1);
+    pv.push(Math.max(0, Math.sin((h - 0.08) * Math.PI * 1.25) * 3300) + Math.abs(noise(i, 1)) * 90);
+    var c = 850 + Math.abs(noise(i, 7)) * 420 + ((i % 37) < 4 ? 1500 : 0);
+    cons.push(c);
+  }
+  function path(arr){ return arr.map(function(v, i){ return (i ? 'L' : 'M') + (L + i / (n - 1) * pw).toFixed(1) + ' ' + (T + ph - v / max * ph).toFixed(1); }).join(' '); }
+  var feed = pv.map(function(v, i){ return Math.max(0, v - cons[i]); });
+  el('path', {d: path(pv) + ' L ' + (L+pw) + ' ' + (T+ph) + ' L ' + L + ' ' + (T+ph) + ' Z', fill:'rgba(232,178,61,.10)'});
+  el('path', {d: path(cons), fill:'none', stroke:'#ff5d5d', 'stroke-width':1.6, 'stroke-linejoin':'round'});
+  el('path', {d: path(pv), fill:'none', stroke:'#e8b23d', 'stroke-width':2, 'stroke-linejoin':'round'});
+  el('path', {d: path(feed), fill:'none', stroke:'#3ddc97', 'stroke-width':1.8, 'stroke-linejoin':'round'});
+  var z = n - 1;
+  document.getElementById('l1').textContent = Math.round(pv[z]);
+  document.getElementById('l2').textContent = Math.round(cons[z]);
+  document.getElementById('l3').textContent = Math.round(feed[z]);
+  // Tooltip
+  var hx = L + 0.62 * pw;
+  el('line', {x1:hx, x2:hx, y1:T, y2:T+ph, stroke:'rgba(229,232,236,.35)', 'stroke-width':1});
+  var k = Math.round(0.62 * (n - 1));
+  [[pv[k],'#e8b23d'],[cons[k],'#ff5d5d'],[feed[k],'#3ddc97']].forEach(function(p){ el('circle', {cx:hx, cy:T+ph-p[0]/max*ph, r:3.5, fill:p[1]}); });
+  el('rect', {x:hx+10, y:T+8, width:150, height:62, rx:4, fill:'rgba(18,21,26,.95)', stroke:'#3a4250'});
+  var lines = [['25.10. 15:42:10','#8891a0',null],['PV: '+Math.round(pv[k])+' W','#e5e8ec','#e8b23d'],['Verbrauch: '+Math.round(cons[k])+' W','#e5e8ec','#ff5d5d'],['Einspeisung: '+Math.round(feed[k])+' W','#e5e8ec','#3ddc97']];
+  lines.forEach(function(l, j){
+    if (l[2]) el('rect', {x:hx+18, y:T+18+j*13, width:7, height:7, fill:l[2]});
+    var t = el('text', {x:hx+(l[2]?30:18), y:T+24+j*13, fill:l[1], 'font-size':9.5, 'font-family':'DejaVu Sans Mono, monospace'}); t.textContent = l[0];
+  });
+</script>
+</body></html>

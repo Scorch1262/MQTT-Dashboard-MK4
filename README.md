@@ -1,5 +1,7 @@
 # MQTT Dashboard (MK4) – v2
 
+![MQTT Dashboard MK4](docs/banner.png)
+
 Lokales Web-Dashboard für MQTT-Topics im eigenen Netzwerk: **Diagramme**,
 **Schalter**, **Slider** und **Anzeigen**, frei in **Gruppen** sortierbar,
 dazu **virtuelle Topics** (berechnete Werte). Ein Python-Skript
@@ -174,9 +176,11 @@ Topics). Die alte Datei bleibt unverändert. Der Port bleibt **5001**.
 
 ## 7. Grenzen & Hinweise
 
-- Messwerte werden wie in v1.9 **nur im Arbeitsspeicher** gehalten
-  (max. 48 h, max. 1 Punkt/s und 20 000 Punkte je Topic) – nach einem
-  Neustart beginnen die Diagramme leer.
+- Messwerte werden wie in v1.9 **nur im Arbeitsspeicher** gehalten –
+  nach einem Neustart beginnen die Diagramme leer. Gespeichert werden
+  volle 48 h je Topic: die letzte Stunde mit jedem Wert (max. 1/s),
+  ältere Werte als Minimum/Maximum je 15 s (bis 12 h) bzw. je 60 s
+  (bis 48 h) – Spitzen bleiben also sichtbar.
 - Es wird `#` abonniert, also alle Topics des Brokers.
 - Kein TLS zum Broker (wie v1.9).
 - Ein geänderter Webserver-Port gilt erst nach einem Neustart.
