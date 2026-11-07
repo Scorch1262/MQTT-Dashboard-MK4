@@ -168,6 +168,13 @@ Alles liegt menschenlesbar in **`config.json`** neben der exe bzw.
 `app.py` (Beispiel: `config.example.json`). Die Datei kann auch von
 Hand bearbeitet werden (Programm vorher beenden).
 
+**Sichern:** In den Einstellungen unter **„Konfiguration sichern“** lässt
+sich die komplette Konfiguration als Datei herunterladen
+(`mqtt-dashboard-mk4-config_<Datum>.json`). Das Broker-Passwort ist nur
+enthalten, wenn das Häkchen gesetzt ist. Zum Wiederherstellen: Programm
+beenden, die Datei als `config.json` neben `app.py` bzw. die exe legen
+(Brume 2: `/root/MQTT-Dashboard-MK4/`), neu starten.
+
 **Umstieg von v1.9:** neue exe in denselben Ordner wie die alte legen
 und starten. Ist noch keine `config.json` vorhanden, wird
 `mqtt_dashboard_config.json` automatisch übernommen (Broker, Gruppen,

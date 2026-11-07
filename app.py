@@ -27,7 +27,7 @@ Versionierung: APP_VERSION ist die einzige Quelle der Wahrheit - der
 GitHub-Actions-Workflow liest sie aus und benennt Release/Tag danach.
 """
 
-APP_VERSION = "2.0.3"
+APP_VERSION = "2.0.4"
 
 import os
 import sys
@@ -979,6 +979,23 @@ def api_config():
     return jsonify(out)
 
 
+@app.route("/api/config/download", methods=["GET"])
+def api_config_download():
+    """v2.0.4: aktuelle Konfiguration als Datei herunterladen. Format = config.json,
+    die Datei kann eine config.json also direkt ersetzen. Das Broker-Passwort
+    ist nur enthalten, wenn ausdruecklich angefordert (?password=1)."""
+    cfg = config.snapshot()
+    with_pw = request.args.get("password") == "1"
+    if not with_pw:
+        cfg["broker"]["password"] = ""
+    body = json.dumps(cfg, indent=2, ensure_ascii=False) + "\n"
+    fname = "mqtt-dashboard-mk4-config_%s.json" % time.strftime("%Y-%m-%d_%H%M")
+    resp = Response(body, mimetype="application/json; charset=utf-8")
+    resp.headers["Content-Disposition"] = 'attachment; filename="%s"' % fname
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
 @app.route("/api/settings", methods=["PUT"])
 def api_settings():
     data = request.get_json(silent=True) or {}
@@ -1563,6 +1580,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
     display:-webkit-box; display:-webkit-flex; display:flex; -webkit-align-items:center; align-items:center;
     margin:2px 0 14px 0; font-size:12.5px; color:var(--text-dim); cursor:pointer;
   }
+  .settings-section label.checkbox-row, .modal label.checkbox-row{
+    text-transform:none; letter-spacing:0; font-size:12.5px; margin-bottom:14px;
+    display:-webkit-box; display:-webkit-flex; display:flex;
+  }
   .checkbox-row input{ width:auto; margin:0 8px 0 0; accent-color:var(--accent-2); }
   .field-label{ font-size:11px; text-transform:uppercase; letter-spacing:0.6px; color:var(--text-dim); margin:4px 0 8px; }
   .series-row{
@@ -1721,6 +1742,23 @@ INDEX_HTML = r"""<!DOCTYPE html>
       Wird &uuml;ber den &bdquo;Speichern&ldquo;-Knopf oben neben &bdquo;&larr; Zur Ansicht&ldquo; gesichert.
       Ein ge&auml;nderter Port gilt nach dem n&auml;chsten Neustart des Programms. Der Standard-Zeitraum gilt
       f&uuml;r Ger&auml;te, auf denen in der Ansicht noch kein Zeitraum gew&auml;hlt wurde.
+    </div>
+  </div>
+
+  <div class="settings-section">
+    <h2>Konfiguration sichern</h2>
+    <div class="hint-text">
+      L&auml;dt die komplette aktuelle Konfiguration herunter: Broker, Gruppen, Diagramme,
+      Schalter/Slider/Anzeigen, virtuelle Topics und allgemeine Einstellungen.
+      Die Datei hat dasselbe Format wie <code>config.json</code> &ndash; zum Wiederherstellen das Programm
+      beenden, die Datei als <code>config.json</code> neben <code>app.py</code> bzw. die exe legen
+      (auf dem Brume 2: <code>/root/MQTT-Dashboard-MK4/</code>) und neu starten.
+      Messwerte sind nicht enthalten.
+    </div>
+    <label class="checkbox-row" id="dl_pw_row"><input type="checkbox" id="dl_pw" onchange="updateDownloadLink()">
+      Broker-Passwort mit in die Datei schreiben (Klartext)</label>
+    <div class="settings-inline-form">
+      <a class="btn" id="dl_link" href="/api/config/download" download style="text-decoration:none; display:inline-block;">&#11015; Konfiguration herunterladen</a>
     </div>
   </div>
 </div>
@@ -2576,12 +2614,18 @@ function pollStatus(){
 }
 
 /* ------------------------------------------------- Allgemein & Broker */
+function updateDownloadLink(){
+  $("dl_link").href = "/api/config/download" + ($("dl_pw").checked ? "?password=1" : "");
+}
 function fillGeneralForm(){
   $("gen_title").value = APP.cfg.title || "";
   $("gen_port").value = APP.cfg.server.port;
   var h = "";
   for(var i = 0; i < RANGE_CHOICES.length; i++) h += '<option value="' + RANGE_CHOICES[i] + '"' + (RANGE_CHOICES[i] === APP.cfg.default_range_h ? " selected" : "") + ">" + RANGE_CHOICES[i] + " Stunden</option>";
   $("gen_range").innerHTML = h;
+  $("dl_pw").checked = false;
+  $("dl_pw_row").style.display = APP.cfg.broker.password_set ? "" : "none";
+  updateDownloadLink();
 }
 function saveGeneralSettings(){
   api("PUT", "/api/settings", { title: $("gen_title").value, port: $("gen_port").value, default_range_h: parseInt($("gen_range").value, 10) }, function(err, d){

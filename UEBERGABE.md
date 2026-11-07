@@ -25,6 +25,7 @@ Eine Datei `app.py`, Aufbau von oben nach unten:
 | Route | Zweck |
 |---|---|
 | `GET /api/config` | komplette Konfiguration (Passwort entfernt, `password_set`) |
+| `GET /api/config/download[?password=1]` | Konfiguration als Datei (Format = `config.json`), Passwort nur mit `password=1` |
 | `PUT /api/settings` | Titel, Port, Standard-Zeitraum |
 | `PUT /api/broker` | Broker ändern → sofortiger Reconnect |
 | `GET /api/status` | Brokerstatus, Topic-Anzahl, Werte/Fehler der virtuellen Topics |
@@ -62,6 +63,13 @@ Eine Datei `app.py`, Aufbau von oben nach unten:
   weiter funktionieren; jetzt in den Einstellungen änderbar.
 
 ## Versionshistorie
+
+### v2.0.4
+- Einstellungen: neuer Bereich „Konfiguration sichern“ – lädt die komplette
+  Konfiguration als `mqtt-dashboard-mk4-config_<Datum>.json` herunter
+  (Format = `config.json`, direkt als Ersatz verwendbar). Broker-Passwort
+  nur auf Wunsch (Häkchen, Route `GET /api/config/download?password=1`).
+- Optik: Häkchen-Zeilen in den Einstellungen nicht mehr in Großbuchstaben.
 
 ### v2.0.3
 - Fehler behoben: In der 24h-/48h-Ansicht endete die Linie mancher Diagramme
