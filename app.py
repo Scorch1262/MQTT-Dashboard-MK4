@@ -27,7 +27,7 @@ Versionierung: APP_VERSION ist die einzige Quelle der Wahrheit - der
 GitHub-Actions-Workflow liest sie aus und benennt Release/Tag danach.
 """
 
-APP_VERSION = "2.0.4"
+APP_VERSION = "2.0.5"
 
 import os
 import sys
@@ -35,6 +35,7 @@ import json
 import time
 import math
 import ast
+import re
 import uuid
 import copy
 import socket
@@ -55,6 +56,7 @@ import paho.mqtt.client as mqtt
 
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024   # Schutz fuer den Konfigurations-Upload
 
 
 # ----------------------------------------------------------------------
@@ -157,7 +159,7 @@ def _float_or_none(v):
     except (TypeError, ValueError):
         raise ValueError("'%s' ist keine Zahl." % v)
     if not math.isfinite(f):
-        raise ValueError("'%s' ist keine gueltige Zahl." % v)
+        raise ValueError("'%s' ist keine gültige Zahl." % v)
     return f
 
 
@@ -216,7 +218,7 @@ def compile_formula(formula: str, n_vars: int):
     try:
         tree = ast.parse(formula, mode="eval")
     except SyntaxError:
-        raise ValueError("Formel ist syntaktisch ungueltig.")
+        raise ValueError("Formel ist syntaktisch ungültig.")
     allowed_vars = set(VAR_NAMES[:n_vars])
     for node in ast.walk(tree):
         if not isinstance(node, _ALLOWED_NODES):
@@ -232,13 +234,13 @@ def compile_formula(formula: str, n_vars: int):
                 )
         if isinstance(node, ast.Call):
             if not isinstance(node.func, ast.Name) or node.func.id not in SAFE_FUNCS:
-                raise ValueError("Nur die erlaubten Funktionen koennen aufgerufen werden.")
+                raise ValueError("Nur die erlaubten Funktionen können aufgerufen werden.")
             if node.keywords:
-                raise ValueError("Funktionsaufrufe mit Schluesselwort-Argumenten sind nicht erlaubt.")
+                raise ValueError("Funktionsaufrufe mit Schlüsselwort-Argumenten sind nicht erlaubt.")
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow):
             if isinstance(node.right, ast.Constant) and isinstance(node.right.value, (int, float)) \
                     and abs(node.right.value) > 100:
-                raise ValueError("Exponent zu gross (max. 100).")
+                raise ValueError("Exponent zu groß (max. 100).")
     return compile(tree, "<formel>", "eval")
 
 
@@ -270,7 +272,7 @@ def _clean_group_id(raw, cfg):
 def validate_group(data, cfg, item_id=None):
     name = _str(data.get("name"), 60)
     if not name:
-        raise ValueError("Bitte einen Namen fuer die Gruppe angeben.")
+        raise ValueError("Bitte einen Namen für die Gruppe angeben.")
     return {"name": name, "color": _hex_color(data.get("color"), GROUP_PALETTE[0])}
 
 
@@ -278,7 +280,7 @@ def validate_chart(data, cfg, item_id=None):
     name = _str(data.get("name"), 80) or "Diagramm"
     series_in = data.get("series") or []
     if not isinstance(series_in, list):
-        raise ValueError("Ungueltige Topic-Liste.")
+        raise ValueError("Ungültige Topic-Liste.")
     series = []
     for i, s in enumerate(series_in):
         if not isinstance(s, dict):
@@ -292,7 +294,7 @@ def validate_chart(data, cfg, item_id=None):
             "color": _hex_color(s.get("color"), GROUP_PALETTE[i % len(GROUP_PALETTE)]),
         })
     if not series:
-        raise ValueError("Bitte mindestens ein Topic fuer das Diagramm angeben.")
+        raise ValueError("Bitte mindestens ein Topic für das Diagramm angeben.")
     if len(series) > 12:
         raise ValueError("Maximal 12 Topics je Diagramm.")
     y_min = _float_or_none(data.get("y_min"))
@@ -347,9 +349,9 @@ def validate_widget(data, cfg, item_id=None):
         on = _str(data.get("payload_on"), 100)
         off = _str(data.get("payload_off"), 100)
         if on == "" or off == "":
-            raise ValueError("Bitte Payload fuer AN und AUS angeben (z. B. 1 / 0 oder ON / OFF).")
+            raise ValueError("Bitte Payload für AN und AUS angeben (z. B. 1 / 0 oder ON / OFF).")
         if on == off:
-            raise ValueError("Payload fuer AN und AUS muessen sich unterscheiden.")
+            raise ValueError("Payload für AN und AUS müssen sich unterscheiden.")
         out["payload_on"] = on
         out["payload_off"] = off
     elif wtype == "slider":
@@ -362,7 +364,7 @@ def validate_widget(data, cfg, item_id=None):
         if mn >= mx:
             raise ValueError("Minimum muss kleiner als Maximum sein.")
         if st <= 0:
-            raise ValueError("Schrittweite muss groesser als 0 sein.")
+            raise ValueError("Schrittweite muss größer als 0 sein.")
         out.update({"min": mn, "max": mx, "step": st})
     else:  # display
         out["payload_on"] = _str(data.get("payload_on"), 100)
@@ -380,14 +382,14 @@ def validate_widget(data, cfg, item_id=None):
 def validate_virtual(data, cfg, item_id=None):
     name = _str(data.get("name"), 300)
     if not name:
-        raise ValueError("Bitte einen Namen (Topic) fuer das virtuelle Topic angeben.")
+        raise ValueError("Bitte einen Namen (Topic) für das virtuelle Topic angeben.")
     sources = [_str(s, 300) for s in (data.get("sources") or []) if _str(s, 300)]
     if not sources:
         raise ValueError("Bitte mindestens ein Quell-Topic angeben.")
     if len(sources) > len(VAR_NAMES):
         raise ValueError("Maximal %d Quell-Topics (Variablen %s)." % (len(VAR_NAMES), ", ".join(VAR_NAMES)))
     if name in sources:
-        raise ValueError("Ein virtuelles Topic darf nicht von sich selbst abhaengen.")
+        raise ValueError("Ein virtuelles Topic darf nicht von sich selbst abhängen.")
     for vt in cfg.get("virtual_topics", []):
         if vt["id"] != item_id and vt["name"] == name:
             raise ValueError("Es gibt bereits ein virtuelles Topic mit diesem Namen.")
@@ -491,6 +493,102 @@ def normalize_config(cfg: dict) -> dict:
             clean.append(item)
         cfg[coll] = clean
     return cfg
+
+
+_ID_OK = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_COLL_LABEL = {"groups": "Gruppe", "charts": "Diagramm", "widgets": "Element",
+               "virtual_topics": "Virtuelles Topic"}
+
+
+def import_config(raw, current):
+    """v2.0.5: hochgeladene Konfiguration pruefen und in eine saubere config
+    umwandeln. Jeder Eintrag laeuft durch dieselben Pruefungen wie beim
+    Anlegen in den Einstellungen; fehlerhafte Eintraege werden uebersprungen
+    und als Warnung gemeldet. Akzeptiert auch das v1.x-Format.
+    Rueckgabe: (neue_config, warnungen, info)"""
+    if not isinstance(raw, dict):
+        raise ValueError("Die Datei enthält keine MQTT-Dashboard-Konfiguration.")
+    info = {"legacy": False, "password_kept": False}
+    if "items" in raw and not any(k in raw for k in COLLECTIONS):
+        raw = migrate_legacy(raw)
+        info["legacy"] = True
+        # v1.x kannte weder Port noch Titel/Zeitraum -> aktuelle Werte behalten
+        raw["server"] = copy.deepcopy(current["server"])
+        raw["title"] = current.get("title")
+        raw["default_range_h"] = current.get("default_range_h")
+    if not any(k in raw for k in COLLECTIONS + ("broker",)):
+        raise ValueError("Die Datei enthält keine MQTT-Dashboard-Konfiguration "
+                         "(weder Broker noch Gruppen, Diagramme, Elemente oder virtuelle Topics).")
+    new = copy.deepcopy(DEFAULT_CONFIG)
+    warnings = []
+
+    # Allgemein
+    srv = raw.get("server") if isinstance(raw.get("server"), dict) else {}
+    new["server"]["host"] = _str(srv.get("host"), 64) or current["server"].get("host", "0.0.0.0")
+    try:
+        port = int(srv.get("port"))
+        if not 1 <= port <= 65535:
+            raise ValueError
+    except (TypeError, ValueError):
+        port = current["server"]["port"]
+        if srv.get("port") not in (None, ""):
+            warnings.append("Webserver-Port ungültig - der bisherige Port %d bleibt." % port)
+    new["server"]["port"] = port
+    new["title"] = _str(raw.get("title"), 60) or current.get("title") or DEFAULT_CONFIG["title"]
+    rng = raw.get("default_range_h")
+    new["default_range_h"] = rng if rng in RANGE_CHOICES_H else current.get("default_range_h", 24)
+
+    # Broker
+    b = raw.get("broker") if isinstance(raw.get("broker"), dict) else {}
+    nb = new["broker"]
+    nb["host"] = _str(b.get("host"), 200)
+    try:
+        nb["port"] = int(b.get("port") or 1883)
+        if not 1 <= nb["port"] <= 65535:
+            raise ValueError
+    except (TypeError, ValueError):
+        nb["port"] = 1883
+        warnings.append("Broker-Port ungültig - 1883 wird verwendet.")
+    nb["username"] = _str(b.get("username"), 200)
+    nb["client_id"] = _str(b.get("client_id"), 100)
+    nb["password"] = str(b.get("password") or "")[:200]
+    cb = current["broker"]
+    # Downloads enthalten das Passwort standardmaessig nicht -> beim selben
+    # Broker/Benutzer das bisher gespeicherte Passwort behalten.
+    if not nb["password"] and cb.get("password") and nb["host"] == cb.get("host") \
+            and nb["username"] == cb.get("username"):
+        nb["password"] = cb["password"]
+        info["password_kept"] = True
+
+    # Gruppen zuerst (Diagramme/Elemente verweisen darauf), dann der Rest
+    for coll in ("groups", "charts", "widgets", "virtual_topics"):
+        items = raw.get(coll, [])
+        if not isinstance(items, list):
+            warnings.append("Bereich '%s' ist keine Liste und wurde übersprungen." % coll)
+            continue
+        used = set()
+        for idx, it in enumerate(items):
+            if not isinstance(it, dict):
+                warnings.append("%s Nr. %d ist ungültig und wurde übersprungen." % (_COLL_LABEL[coll], idx + 1))
+                continue
+            iid = str(it.get("id") or "")
+            if not _ID_OK.match(iid) or iid in used:
+                iid = new_id(ID_PREFIX[coll])
+            try:
+                clean = VALIDATORS[coll](it, new, iid)
+            except ValueError as e:
+                name = _str(it.get("name"), 60) or "Nr. %d" % (idx + 1)
+                warnings.append("%s \u201e%s\u201c übersprungen: %s" % (_COLL_LABEL[coll], name, e))
+                continue
+            try:
+                order = int(it.get("order", idx))
+            except (TypeError, ValueError):
+                order = idx
+            entry = dict({"id": iid}, **clean)
+            entry["order"] = order
+            new[coll].append(entry)
+            used.add(iid)
+    return normalize_config(new), warnings, info
 
 
 class ConfigStore:
@@ -892,7 +990,7 @@ class MqttManager:
         else:
             with self.lock:
                 self.connected = False
-                self.last_error = "Broker lehnt Verbindung ab (Code %s) - Benutzername/Passwort pruefen." % rc
+                self.last_error = "Broker lehnt Verbindung ab (Code %s) - Benutzername/Passwort prüfen." % rc
             print("[MQTT]", self.last_error)
 
     def _on_disconnect(self, client, userdata, *args):
@@ -900,7 +998,7 @@ class MqttManager:
             if self.client is client:
                 self.connected = False
                 if not self.last_error:
-                    self.last_error = "Verbindung getrennt - neuer Versuch laeuft automatisch."
+                    self.last_error = "Verbindung getrennt - neuer Versuch läuft automatisch."
 
     def _on_message(self, client, userdata, msg):
         try:
@@ -994,6 +1092,67 @@ def api_config_download():
     resp.headers["Content-Disposition"] = 'attachment; filename="%s"' % fname
     resp.headers["Cache-Control"] = "no-store"
     return resp
+
+
+def _prune_backups(keep=5):
+    folder = os.path.dirname(CONFIG_PATH)
+    prefix = os.path.basename(CONFIG_PATH) + ".vor-import-"
+    try:
+        files = sorted(f for f in os.listdir(folder) if f.startswith(prefix))
+    except OSError:
+        return
+    for f in files[:-keep]:
+        try:
+            os.remove(os.path.join(folder, f))
+        except OSError:
+            pass
+
+
+@app.route("/api/config/upload", methods=["POST"])
+def api_config_upload():
+    """v2.0.5: Konfiguration hochladen. Mit dry_run=true nur pruefen und eine
+    Zusammenfassung liefern (Vorschau im Browser), sonst uebernehmen. Die
+    bisherige config.json wird vorher als config.json.vor-import-<Zeit>
+    gesichert (die letzten 5 Sicherungen bleiben erhalten)."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or "config" not in data:
+        return _err("Ungültige Anfrage.")
+    current = config.snapshot()
+    try:
+        new, warnings, info = import_config(data["config"], current)
+    except ValueError as e:
+        return _err(str(e))
+    summary = {c: len(new[c]) for c in COLLECTIONS}
+    result = {"summary": summary, "warnings": warnings, "legacy": info["legacy"],
+              "password_kept": info["password_kept"], "broker_host": new["broker"]["host"],
+              "title": new["title"],
+              "restart_required": new["server"]["port"] != current["server"]["port"],
+              "port": new["server"]["port"]}
+    if data.get("dry_run"):
+        return jsonify(dict(result, dry_run=True))
+    backup = "%s.vor-import-%s" % (CONFIG_PATH, time.strftime("%Y%m%d-%H%M%S"))
+    with config.lock:
+        try:
+            with open(backup, "w", encoding="utf-8") as f:
+                json.dump(config.cfg, f, indent=2, ensure_ascii=False)
+        except OSError as e:
+            return _err("Sicherung der bisherigen Konfiguration fehlgeschlagen: %s" % e, 500)
+        config.cfg = new
+        config.migrated_from_legacy = False
+        config.save()
+    _prune_backups()
+    broker_changed = any(new["broker"].get(k) != current["broker"].get(k)
+                         for k in ("host", "port", "username", "password", "client_id"))
+    if broker_changed:
+        mqtt_manager.start(new["broker"])
+    virtual.rebuild(config.snapshot())
+    print("[Config] Konfiguration hochgeladen und uebernommen (Sicherung: %s)" % backup)
+    return jsonify(dict(result, ok=True, backup=os.path.basename(backup), broker_changed=broker_changed))
+
+
+@app.errorhandler(413)
+def _too_large(e):
+    return _err("Datei zu groß (max. 5 MB).", 413)
 
 
 @app.route("/api/settings", methods=["PUT"])
@@ -1131,7 +1290,7 @@ def api_virtual_test():
     for i, s in enumerate(sources):
         v = store.latest_numeric(s)
         if v is None:
-            return _err("Fuer %s = '%s' liegt noch kein Zahlenwert vor." % (VAR_NAMES[i], s))
+            return _err("Für %s = '%s' liegt noch kein Zahlenwert vor." % (VAR_NAMES[i], s))
         values.append(v)
     try:
         result = eval_formula(code, values)
@@ -1177,7 +1336,7 @@ def api_update(coll, item_id):
         items = config.cfg[coll]
         idx = next((i for i, it in enumerate(items) if it["id"] == item_id), None)
         if idx is None:
-            return _err("Eintrag nicht gefunden (evtl. inzwischen geloescht).", 404)
+            return _err("Eintrag nicht gefunden (evtl. inzwischen gelöscht).", 404)
         try:
             clean = VALIDATORS[coll](data, config.cfg, item_id)
         except ValueError as e:
@@ -1746,20 +1905,29 @@ INDEX_HTML = r"""<!DOCTYPE html>
   </div>
 
   <div class="settings-section">
-    <h2>Konfiguration sichern</h2>
+    <h2>Konfiguration sichern &amp; wiederherstellen</h2>
     <div class="hint-text">
-      L&auml;dt die komplette aktuelle Konfiguration herunter: Broker, Gruppen, Diagramme,
-      Schalter/Slider/Anzeigen, virtuelle Topics und allgemeine Einstellungen.
-      Die Datei hat dasselbe Format wie <code>config.json</code> &ndash; zum Wiederherstellen das Programm
-      beenden, die Datei als <code>config.json</code> neben <code>app.py</code> bzw. die exe legen
-      (auf dem Brume 2: <code>/root/MQTT-Dashboard-MK4/</code>) und neu starten.
-      Messwerte sind nicht enthalten.
+      <b>Herunterladen</b> speichert die komplette aktuelle Konfiguration als Datei: Broker, Gruppen,
+      Diagramme, Schalter/Slider/Anzeigen, virtuelle Topics und allgemeine Einstellungen
+      (Format wie <code>config.json</code>, Messwerte sind nicht enthalten).
     </div>
     <label class="checkbox-row" id="dl_pw_row"><input type="checkbox" id="dl_pw" onchange="updateDownloadLink()">
       Broker-Passwort mit in die Datei schreiben (Klartext)</label>
     <div class="settings-inline-form">
       <a class="btn" id="dl_link" href="/api/config/download" download style="text-decoration:none; display:inline-block;">&#11015; Konfiguration herunterladen</a>
     </div>
+    <div class="hint-text" style="margin-top:14px;">
+      <b>Hochladen</b> ersetzt die aktuelle Konfiguration durch die Datei &ndash; vorher wird eine Vorschau
+      zum Best&auml;tigen angezeigt. Die bisherige Konfiguration wird automatisch als
+      <code>config.json.vor-import-&lt;Zeit&gt;</code> gesichert. Fehlt in der Datei das Broker-Passwort,
+      bleibt das gespeicherte erhalten (gleicher Broker und Benutzer). Auch Dateien aus v1.x
+      (<code>mqtt_dashboard_config.json</code>) werden &uuml;bernommen.
+    </div>
+    <div class="settings-inline-form">
+      <input type="file" id="ul_file" accept=".json,application/json" style="display:none;" onchange="uploadConfigFile(this)">
+      <button class="btn" onclick="$('ul_file').click()">&#11014; Konfiguration hochladen</button>
+    </div>
+    <div class="status-line" id="ul_result"></div>
   </div>
 </div>
 
@@ -2616,6 +2784,57 @@ function pollStatus(){
 /* ------------------------------------------------- Allgemein & Broker */
 function updateDownloadLink(){
   $("dl_link").href = "/api/config/download" + ($("dl_pw").checked ? "?password=1" : "");
+}
+function uploadSummaryText(d){
+  var sm = d.summary, parts = [];
+  parts.push(sm.groups + (sm.groups === 1 ? " Gruppe" : " Gruppen"));
+  parts.push(sm.charts + (sm.charts === 1 ? " Diagramm" : " Diagramme"));
+  parts.push(sm.widgets + (sm.widgets === 1 ? " Schalter/Slider/Anzeige" : " Schalter/Slider/Anzeigen"));
+  parts.push(sm.virtual_topics + (sm.virtual_topics === 1 ? " virtuelles Topic" : " virtuelle Topics"));
+  return parts.join(", ");
+}
+function uploadConfigFile(inp){
+  var f = inp.files && inp.files[0];
+  if(!f) return;
+  var out = $("ul_result");
+  out.className = "status-line"; out.textContent = "";
+  var reader = new FileReader();
+  reader.onerror = function(){ showToast("Datei konnte nicht gelesen werden.", "err"); inp.value = ""; };
+  reader.onload = function(){
+    var data;
+    try { data = JSON.parse(String(reader.result).replace(/^\uFEFF/, "")); }
+    catch(e){ showToast("Die Datei ist keine g\u00fcltige JSON-Datei.", "err"); inp.value = ""; return; }
+    api("POST", "/api/config/upload", { config: data, dry_run: true }, function(err, d){
+      if(err){ showToast(err, "err"); out.className = "status-line err"; out.textContent = err; inp.value = ""; return; }
+      var msg = "Konfiguration aus \u201e" + f.name + "\u201c \u00fcbernehmen?\n\n" +
+        "Titel: " + d.title + "\nBroker: " + (d.broker_host || "(keiner)") + "\n" + uploadSummaryText(d) + "\n";
+      if(d.legacy) msg += "\nDatei im v1.x-Format \u2013 wird umgewandelt.";
+      if(d.password_kept) msg += "\nDas gespeicherte Broker-Passwort bleibt erhalten.";
+      if(d.restart_required) msg += "\nNeuer Webserver-Port " + d.port + " gilt erst nach einem Neustart.";
+      if(d.warnings.length){
+        msg += "\n\n" + d.warnings.length + (d.warnings.length === 1 ? " Hinweis:" : " Hinweise:") + "\n- " + d.warnings.slice(0, 8).join("\n- ");
+        if(d.warnings.length > 8) msg += "\n- \u2026";
+      }
+      msg += "\n\nDie aktuelle Konfiguration wird ersetzt (eine Sicherung wird automatisch angelegt).";
+      if(!window.confirm(msg)){ inp.value = ""; return; }
+      api("POST", "/api/config/upload", { config: data }, function(err2, r){
+        inp.value = "";
+        if(err2){ showToast(err2, "err"); out.className = "status-line err"; out.textContent = err2; return; }
+        out.className = "status-line ok";
+        out.textContent = "\u25cf \u00dcbernommen: " + uploadSummaryText(r) + ". Sicherung der vorherigen Konfiguration: " + r.backup +
+          (r.warnings.length ? " \u00b7 " + r.warnings.length + (r.warnings.length === 1 ? " Eintrag" : " Eintr\u00e4ge") + " \u00fcbersprungen" : "");
+        showToast("Konfiguration \u00fcbernommen." + (r.restart_required ? " Neuer Port gilt nach einem Neustart." : ""));
+        APP.data = {}; APP.states = {};
+        loadConfig(function(){
+          fillBrokerForm(); fillGeneralForm(); refreshSettingsLists();
+          $("migrationNotice").style.display = "none";
+        });
+        setTimeout(pollStatus, 1200);
+        setTimeout(loadTopics, 3000);
+      });
+    });
+  };
+  reader.readAsText(f);
 }
 function fillGeneralForm(){
   $("gen_title").value = APP.cfg.title || "";

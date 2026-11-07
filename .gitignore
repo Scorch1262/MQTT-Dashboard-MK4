@@ -2,6 +2,7 @@
 config.json
 config.json.tmp
 config.json.defekt-*
+config.json.vor-import-*
 mqtt_dashboard_config.json
 
 # Python

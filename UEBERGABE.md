@@ -12,6 +12,7 @@ Eine Datei `app.py`, Aufbau von oben nach unten:
 | Formeln | `compile_formula()` prüft per AST gegen eine Positivliste, `eval_formula()` |
 | Validierung | `validate_group/_chart/_widget/_virtual` – einzige Stelle, an der Eingaben geprüft werden |
 | `migrate_legacy()` | Umwandlung v1.x-`mqtt_dashboard_config.json` → v2-`config.json` |
+| `import_config()` | hochgeladene Konfiguration (auch v1.x) prüfen/übernehmen, liefert Warnungen für übersprungene Einträge |
 | `ConfigStore` | Laden/Normalisieren/atomares Speichern (`.tmp` + `os.replace`), defekte Datei wird als `config.json.defekt-<ts>` gesichert |
 | `TopicStore`, `_Series` | Werte + Verlauf im Speicher, je Topic drei Zeitstufen: letzte Stunde jeder Punkt (max. 1/s), bis 12 h min/max je 15 s, bis 49 h min/max je 60 s (`_compact_into()`); Verdichtung beim Schreiben alle 10 s und per Hintergrund-Thread jede Minute |
 | `VirtualEngine` | berechnet virtuelle Topics bei Änderung einer Quelle (bis Tiefe 3, virtuell auf virtuell möglich) |
@@ -26,6 +27,7 @@ Eine Datei `app.py`, Aufbau von oben nach unten:
 |---|---|
 | `GET /api/config` | komplette Konfiguration (Passwort entfernt, `password_set`) |
 | `GET /api/config/download[?password=1]` | Konfiguration als Datei (Format = `config.json`), Passwort nur mit `password=1` |
+| `POST /api/config/upload` | Konfiguration hochladen (`{config, dry_run}`), `import_config()` prüft jeden Eintrag mit den normalen Validatoren, Sicherung `config.json.vor-import-<Zeit>` |
 | `PUT /api/settings` | Titel, Port, Standard-Zeitraum |
 | `PUT /api/broker` | Broker ändern → sofortiger Reconnect |
 | `GET /api/status` | Brokerstatus, Topic-Anzahl, Werte/Fehler der virtuellen Topics |
@@ -63,6 +65,18 @@ Eine Datei `app.py`, Aufbau von oben nach unten:
   weiter funktionieren; jetzt in den Einstellungen änderbar.
 
 ## Versionshistorie
+
+### v2.0.5
+- Einstellungen: Konfiguration **hochladen** (Bereich heißt jetzt
+  „Konfiguration sichern & wiederherstellen“). Ablauf: Datei im Browser
+  lesen → `POST /api/config/upload` mit `dry_run` → Vorschau zum Bestätigen
+  → Übernahme. Jeder Eintrag läuft durch die normalen Validatoren,
+  fehlerhafte werden mit Hinweis übersprungen; ungültige IDs werden neu
+  vergeben. v1.x-Dateien werden umgewandelt (Port/Titel/Zeitraum bleiben).
+  Vorherige Konfiguration wird als `config.json.vor-import-<Zeit>` gesichert
+  (letzte 5). Fehlendes Broker-Passwort → gespeichertes bleibt (gleicher
+  Broker/Benutzer). Broker wird nur bei Änderung neu verbunden. Uploads max. 5 MB.
+- Meldungen im Browser mit echten Umlauten (vorher „ue“, „ae“ …).
 
 ### v2.0.4
 - Einstellungen: neuer Bereich „Konfiguration sichern“ – lädt die komplette
