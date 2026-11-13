@@ -27,7 +27,7 @@ Versionierung: APP_VERSION ist die einzige Quelle der Wahrheit - der
 GitHub-Actions-Workflow liest sie aus und benennt Release/Tag danach.
 """
 
-APP_VERSION = "2.0.5"
+APP_VERSION = "2.1.0"
 
 import os
 import sys
@@ -113,6 +113,41 @@ LEGACY_GROUP_COLORS = [
     "#263020", "#202630", "#302020", "#303025", "#202530", "#252030",
 ]
 
+# v2.1.0: Internet-Topics (Wetter von Open-Meteo, EPEX-Strompreis von
+# Energy-Charts/aWATTar). Ein Topic = Basis-Topic + "/" + Unter-Topic.
+INTERNET_DEFAULT = {
+    "base_topic": "dashboard/internet",
+    "publish": True,
+    "retain": True,
+    "weather": {
+        "enabled": False,
+        "location": "",
+        "latitude": None,
+        "longitude": None,
+        "interval_min": 10,
+        "values": {
+            "temperature": {"enabled": True, "topic": "wetter/temperatur"},
+            "apparent": {"enabled": False, "topic": "wetter/gefuehlte_temperatur"},
+            "humidity": {"enabled": False, "topic": "wetter/luftfeuchte"},
+            "wind": {"enabled": False, "topic": "wetter/wind"},
+        },
+    },
+    "price": {
+        "enabled": False,
+        "zone": "DE-LU",
+        "unit": "ct_kwh",
+        "surcharge_ct": 0.0,
+        "vat_pct": 19.0,
+        "values": {
+            "current": {"enabled": True, "topic": "strompreis/aktuell"},
+            "min": {"enabled": False, "topic": "strompreis/heute_min"},
+            "max": {"enabled": False, "topic": "strompreis/heute_max"},
+            "avg": {"enabled": False, "topic": "strompreis/heute_mittel"},
+            "total": {"enabled": False, "topic": "strompreis/endpreis"},
+        },
+    },
+}
+
 DEFAULT_CONFIG = {
     "server": {"host": "0.0.0.0", "port": 5001},
     "title": "MQTT Dashboard",
@@ -128,6 +163,7 @@ DEFAULT_CONFIG = {
     "charts": [],
     "widgets": [],
     "virtual_topics": [],
+    "internet": copy.deepcopy(INTERNET_DEFAULT),
 }
 
 COLLECTIONS = ("groups", "charts", "widgets", "virtual_topics")
@@ -480,6 +516,10 @@ def normalize_config(cfg: dict) -> dict:
         cfg["broker"]["port"] = 1883
     if cfg.get("default_range_h") not in RANGE_CHOICES_H:
         cfg["default_range_h"] = 24
+    try:
+        cfg["internet"] = clean_internet(cfg.get("internet"), strict=False)
+    except ValueError:
+        cfg["internet"] = copy.deepcopy(INTERNET_DEFAULT)
     gids = _group_ids(cfg)
     for coll in COLLECTIONS:
         clean = []
@@ -508,7 +548,7 @@ def import_config(raw, current):
     Rueckgabe: (neue_config, warnungen, info)"""
     if not isinstance(raw, dict):
         raise ValueError("Die Datei enthält keine MQTT-Dashboard-Konfiguration.")
-    info = {"legacy": False, "password_kept": False}
+    info = {"legacy": False, "password_kept": False, "internet_kept": False}
     if "items" in raw and not any(k in raw for k in COLLECTIONS):
         raw = migrate_legacy(raw)
         info["legacy"] = True
@@ -516,6 +556,7 @@ def import_config(raw, current):
         raw["server"] = copy.deepcopy(current["server"])
         raw["title"] = current.get("title")
         raw["default_range_h"] = current.get("default_range_h")
+        raw.pop("internet", None)        # v1.x kannte keine Internet-Topics -> aktuelle behalten
     if not any(k in raw for k in COLLECTIONS + ("broker",)):
         raise ValueError("Die Datei enthält keine MQTT-Dashboard-Konfiguration "
                          "(weder Broker noch Gruppen, Diagramme, Elemente oder virtuelle Topics).")
@@ -588,6 +629,15 @@ def import_config(raw, current):
             entry["order"] = order
             new[coll].append(entry)
             used.add(iid)
+    if isinstance(raw.get("internet"), dict):
+        try:
+            new["internet"] = clean_internet(raw["internet"], strict=True)
+        except ValueError as e:
+            new["internet"] = copy.deepcopy(current.get("internet") or INTERNET_DEFAULT)
+            warnings.append("Internet-Topics ungültig (%s) - die bisherigen Einstellungen bleiben." % e)
+    else:
+        new["internet"] = copy.deepcopy(current.get("internet") or INTERNET_DEFAULT)
+        info["internet_kept"] = True
     return normalize_config(new), warnings, info
 
 
@@ -1022,6 +1072,495 @@ class MqttManager:
 
 
 # ----------------------------------------------------------------------
+# Internet-Topics (v2.1.0)
+# ----------------------------------------------------------------------
+# Quellen (kostenlos, ohne Konto/API-Schluessel):
+#   Wetter ....... Open-Meteo (open-meteo.com, CC BY 4.0)
+#   Strompreis ... Energy-Charts / Fraunhofer ISE (EPEX Day-Ahead, EUR/MWh),
+#                  Ersatz fuer DE-LU/AT: aWATTar (nur aktueller Preis)
+# Die URLs lassen sich fuer Tests per Umgebungsvariable umbiegen.
+URL_FORECAST = os.environ.get("MQTTDASH_URL_FORECAST", "https://api.open-meteo.com/v1/forecast")
+URL_GEOCODE = os.environ.get("MQTTDASH_URL_GEOCODE", "https://geocoding-api.open-meteo.com/v1/search")
+URL_PRICE = os.environ.get("MQTTDASH_URL_PRICE", "https://api.energy-charts.info/price")
+URL_AWATTAR = {
+    "DE-LU": os.environ.get("MQTTDASH_URL_AWATTAR_DE", "https://api.awattar.de/v1/marketdata"),
+    "AT": os.environ.get("MQTTDASH_URL_AWATTAR_AT", "https://api.awattar.at/v1/marketdata"),
+}
+
+# Alle Zonen liegen in MEZ/MESZ (wichtig fuer "heute" bei Min/Max/Mittel)
+PRICE_ZONES = [
+    ("DE-LU", "Deutschland / Luxemburg"), ("AT", "Österreich"), ("CH", "Schweiz"),
+    ("NL", "Niederlande"), ("BE", "Belgien"), ("FR", "Frankreich"),
+    ("DK1", "Dänemark West (DK1)"), ("DK2", "Dänemark Ost (DK2)"), ("PL", "Polen"),
+    ("CZ", "Tschechien"), ("SI", "Slowenien"), ("HU", "Ungarn"),
+    ("IT-North", "Italien Nord"), ("SE4", "Schweden SE4"), ("NO2", "Norwegen NO2"),
+]
+PRICE_ZONE_IDS = [z for z, _ in PRICE_ZONES]
+WEATHER_FIELDS = {   # Schluessel -> (Open-Meteo-Feld, Einheit, Nachkommastellen)
+    "temperature": ("temperature_2m", "°C", 1),
+    "apparent": ("apparent_temperature", "°C", 1),
+    "humidity": ("relative_humidity_2m", "%", 0),
+    "wind": ("wind_speed_10m", "km/h", 1),
+}
+PRICE_KEYS = ("current", "min", "max", "avg", "total")
+WEATHER_INTERVALS = (5, 10, 15, 30, 60)
+PRICE_REFRESH_MS = 60 * 60 * 1000       # Preise stuendlich neu laden
+PRICE_MIN_GAP_MS = 60 * 1000            # Energy-Charts erlaubt 2 Abrufe/min
+RETRY_MS = 5 * 60 * 1000
+EMIT_EVERY_MS = 60 * 1000               # Werte lokal jede Minute fortschreiben
+REPUBLISH_MS = 10 * 60 * 1000           # unveraenderte Werte spaetestens alle 10 min erneut senden
+
+
+def _clean_sub_topic(v, fallback):
+    t = _str(v, 200).strip("/")
+    while "//" in t:
+        t = t.replace("//", "/")
+    return t or fallback
+
+
+def _topic_ok(t):
+    return bool(t) and "#" not in t and "+" not in t and len(t) <= 250
+
+
+def join_topic(base, sub):
+    base = (base or "").strip("/")
+    return "%s/%s" % (base, sub) if base else sub
+
+
+def clean_internet(data, strict=True):
+    """Prueft/vervollstaendigt den Internet-Bereich der Konfiguration.
+    strict=False (beim Laden): fehlende/kaputte Felder still durch Standardwerte ersetzen."""
+    d = data if isinstance(data, dict) else {}
+    out = copy.deepcopy(INTERNET_DEFAULT)
+    base = _str(d.get("base_topic", out["base_topic"]), 200).strip("/")
+    if base and not _topic_ok(base):
+        if strict:
+            raise ValueError("Basis-Topic darf keine Platzhalter (# oder +) enthalten.")
+        base = INTERNET_DEFAULT["base_topic"]
+    out["base_topic"] = base
+    out["publish"] = bool(d.get("publish", out["publish"]))
+    out["retain"] = bool(d.get("retain", out["retain"]))
+
+    w_in = d.get("weather") if isinstance(d.get("weather"), dict) else {}
+    w = out["weather"]
+    w["enabled"] = bool(w_in.get("enabled", False))
+    w["location"] = _str(w_in.get("location"), 120)
+    try:
+        lat = _float_or_none(w_in.get("latitude"))
+        lon = _float_or_none(w_in.get("longitude"))
+    except ValueError:
+        lat = lon = None
+    if lat is not None and not -90 <= lat <= 90:
+        lat = None
+    if lon is not None and not -180 <= lon <= 180:
+        lon = None
+    w["latitude"], w["longitude"] = lat, lon
+    try:
+        iv = int(w_in.get("interval_min", 10))
+    except (TypeError, ValueError):
+        iv = 10
+    w["interval_min"] = iv if iv in WEATHER_INTERVALS else 10
+    if strict and w["enabled"] and (lat is None or lon is None):
+        raise ValueError("Für das Wetter bitte zuerst einen Ort suchen und auswählen.")
+
+    p_in = d.get("price") if isinstance(d.get("price"), dict) else {}
+    p = out["price"]
+    p["enabled"] = bool(p_in.get("enabled", False))
+    zone = _str(p_in.get("zone"), 20) or "DE-LU"
+    if zone not in PRICE_ZONE_IDS:
+        if strict:
+            raise ValueError("Unbekannte Gebotszone '%s'." % zone)
+        zone = "DE-LU"
+    p["zone"] = zone
+    p["unit"] = "eur_mwh" if p_in.get("unit") == "eur_mwh" else "ct_kwh"
+    for key, lo, hi, dflt in (("surcharge_ct", -100.0, 500.0, 0.0), ("vat_pct", 0.0, 100.0, 19.0)):
+        try:
+            v = _float_or_none(p_in.get(key))
+        except ValueError:
+            if strict:
+                raise ValueError("%s ist keine Zahl." % ("Aufschlag" if key == "surcharge_ct" else "MwSt"))
+            v = None
+        if v is None:
+            v = dflt
+        if not lo <= v <= hi:
+            if strict:
+                raise ValueError("%s außerhalb des erlaubten Bereichs (%g bis %g)." %
+                                 ("Aufschlag" if key == "surcharge_ct" else "MwSt", lo, hi))
+            v = dflt
+        p[key] = v
+
+    used = {}
+    for sect, keys in (("weather", list(WEATHER_FIELDS)), ("price", list(PRICE_KEYS))):
+        vin = (d.get(sect) or {}).get("values") if isinstance(d.get(sect), dict) else None
+        vin = vin if isinstance(vin, dict) else {}
+        for k in keys:
+            item_in = vin.get(k) if isinstance(vin.get(k), dict) else {}
+            item = out[sect]["values"][k]
+            item["enabled"] = bool(item_in.get("enabled", item["enabled"]))
+            sub = _clean_sub_topic(item_in.get("topic"), item["topic"])
+            if not _topic_ok(sub):
+                if strict:
+                    raise ValueError("Topic '%s' darf keine Platzhalter (# oder +) enthalten." % sub)
+                sub = INTERNET_DEFAULT[sect]["values"][k]["topic"]
+            item["topic"] = sub
+            if item["enabled"] and out[sect]["enabled"]:
+                full = join_topic(base, sub)
+                if strict and full in used:
+                    raise ValueError("Das Topic '%s' ist doppelt vergeben." % full)
+                used[full] = k
+    return out
+
+
+# --- HTTP -------------------------------------------------------------
+_SSL_CTX = None
+
+
+def _ssl_context():
+    """Zertifikate bevorzugt aus dem mitgelieferten certifi-Paket - damit klappt
+    HTTPS auch auf dem Brume 2 ohne ca-bundle und in der macOS-App."""
+    global _SSL_CTX
+    if _SSL_CTX is None:
+        import ssl
+        try:
+            import certifi
+            _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
+        except Exception:
+            _SSL_CTX = ssl.create_default_context()
+    return _SSL_CTX
+
+
+def http_get_json(url, params=None, timeout=15):
+    import urllib.request
+    import urllib.error
+    import urllib.parse
+    import ssl
+    if params:
+        url = url + ("&" if "?" in url else "?") + urllib.parse.urlencode(params)
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "MQTT-Dashboard-MK4/%s" % APP_VERSION, "Accept": "application/json"})
+    host = urllib.parse.urlparse(url).netloc
+    try:
+        ctx = _ssl_context() if url.startswith("https:") else None
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+            body = resp.read(4 * 1024 * 1024)
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            raise RuntimeError("%s: zu viele Anfragen (HTTP 429) - nächster Versuch später." % host)
+        raise RuntimeError("%s antwortet mit HTTP %d." % (host, e.code))
+    except urllib.error.URLError as e:
+        reason = e.reason
+        if isinstance(reason, ssl.SSLError) or "CERTIFICATE" in str(reason).upper():
+            raise RuntimeError("%s: Zertifikat konnte nicht geprüft werden (%s)." % (host, reason))
+        raise RuntimeError("%s nicht erreichbar (%s) - besteht eine Internetverbindung?" % (host, reason))
+    except socket.timeout:
+        raise RuntimeError("%s: Zeitüberschreitung nach %d s." % (host, timeout))
+    except OSError as e:
+        raise RuntimeError("%s nicht erreichbar (%s)." % (host, e))
+    try:
+        return json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise RuntimeError("%s lieferte keine gültigen Daten." % host)
+
+
+# --- Zeit: MEZ/MESZ ohne zoneinfo (fehlt unter Windows/OpenWrt oft) ----
+def _last_sunday_utc(year, month):
+    import calendar
+    last = calendar.monthrange(year, month)[1]
+    wd = calendar.weekday(year, month, last)          # Mo=0 .. So=6
+    day = last - ((wd - 6) % 7)
+    return calendar.timegm((year, month, day, 1, 0, 0)) * 1000   # 01:00 UTC
+
+
+def cet_offset_ms(ts_ms):
+    y = time.gmtime(ts_ms / 1000.0).tm_year
+    if _last_sunday_utc(y, 3) <= ts_ms < _last_sunday_utc(y, 10):
+        return 2 * 3600 * 1000
+    return 3600 * 1000
+
+
+def cet_day(ts_ms):
+    return (ts_ms + cet_offset_ms(ts_ms)) // 86400000
+
+
+# --- Auswertung der Antworten -----------------------------------------
+def _parse_iso_ms(s):
+    from datetime import datetime
+    s = str(s).strip().replace("Z", "+00:00")
+    return int(datetime.fromisoformat(s).timestamp() * 1000)
+
+
+def parse_energy_charts(d):
+    """Liefert [(start_ms, eur_mwh)], sortiert. Versteht das bekannte Format
+    (unix_seconds + price) und das neuere v2-Format (data[].timestamp/values)."""
+    pts = []
+    if isinstance(d, dict) and isinstance(d.get("unix_seconds"), list) and isinstance(d.get("price"), list):
+        factor = 1.0
+        unit = str(d.get("unit") or "").lower().replace(" ", "")
+        if "kwh" in unit and "mwh" not in unit:
+            factor = 1000.0 if "ct" not in unit else 10.0
+        for ts, pr in zip(d["unix_seconds"], d["price"]):
+            if isinstance(ts, (int, float)) and isinstance(pr, (int, float)) and math.isfinite(pr):
+                pts.append((int(ts) * 1000, float(pr) * factor))
+    elif isinstance(d, dict) and isinstance(d.get("data"), list):
+        for rec in d["data"]:
+            if not isinstance(rec, dict):
+                continue
+            vals = rec.get("values")
+            val = None
+            if isinstance(vals, dict):
+                for v in vals.values():
+                    if isinstance(v, (int, float)) and math.isfinite(v):
+                        val = float(v)
+                        break
+            elif isinstance(vals, (int, float)):
+                val = float(vals)
+            if val is None or not rec.get("timestamp"):
+                continue
+            try:
+                pts.append((_parse_iso_ms(rec["timestamp"]), val))
+            except (ValueError, TypeError):
+                continue
+    pts.sort()
+    return pts
+
+
+def parse_awattar(d):
+    pts, ends = [], []
+    for rec in (d.get("data") if isinstance(d, dict) else None) or []:
+        try:
+            pts.append((int(rec["start_timestamp"]), float(rec["marketprice"])))
+            ends.append(int(rec["end_timestamp"]) - int(rec["start_timestamp"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    pts.sort()
+    return pts, (min(ends) if ends else 3600 * 1000)
+
+
+def _interval_of(pts):
+    diffs = sorted(b[0] - a[0] for a, b in zip(pts, pts[1:]) if b[0] > a[0])
+    return diffs[len(diffs) // 2] if diffs else 3600 * 1000
+
+
+class InternetManager:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.wake = threading.Event()
+        self.cfg = copy.deepcopy(INTERNET_DEFAULT)
+        self.own_topics = set()
+        self.published = {}      # topic -> (text, ts)
+        self.thread = None
+        self.w = {"next": 0, "last_ok": 0, "error": "", "data": {}}
+        self.p = {"next": 0, "last_try": 0, "last_ok": 0, "error": "", "source": "",
+                  "series": [], "interval": 0, "stats_ok": False, "zone": ""}
+        self.last_emit = 0
+        self.values = {}         # (sect, key) -> {text, unit, topic}
+        self._emitted = set()
+
+    # -- Steuerung --
+    def configure(self, cfg_internet):
+        with self.lock:
+            old = self.cfg
+            self.cfg = copy.deepcopy(cfg_internet)
+            ow, nw = old["weather"], self.cfg["weather"]
+            if (ow["latitude"], ow["longitude"], ow["enabled"]) != (nw["latitude"], nw["longitude"], nw["enabled"]):
+                self.w.update({"next": 0, "data": {}, "error": "", "last_ok": 0})
+            if self.cfg["price"]["zone"] != self.p["zone"] or not old["price"]["enabled"]:
+                self.p.update({"next": 0, "series": [], "error": "", "last_ok": 0, "source": ""})
+            self.values = {}
+            self.own_topics = self._topics_locked()
+            self.published = {}
+            self.last_emit = 0
+        self.wake.set()
+
+    def refresh_now(self):
+        with self.lock:
+            self.w["next"] = 0
+            self.p["next"] = 0
+            self.p["last_try"] = min(self.p["last_try"], now_ms() - PRICE_MIN_GAP_MS)
+        self.wake.set()
+
+    def start(self):
+        if self.thread is None:
+            self.thread = threading.Thread(target=self._run, name="internet-topics", daemon=True)
+            self.thread.start()
+
+    def is_own(self, topic):
+        return topic in self.own_topics
+
+    def _topics_locked(self):
+        c, out = self.cfg, set()
+        for sect in ("weather", "price"):
+            if c[sect]["enabled"]:
+                for k, it in c[sect]["values"].items():
+                    if it["enabled"]:
+                        out.add(join_topic(c["base_topic"], it["topic"]))
+        return out
+
+    # -- Hauptschleife --
+    def _run(self):
+        while True:
+            self.wake.wait(5)
+            self.wake.clear()
+            try:
+                self._tick()
+            except Exception as e:      # darf den Thread nie beenden
+                print("[Internet] Fehler:", e)
+
+    def _tick(self):
+        now = now_ms()
+        with self.lock:
+            c = copy.deepcopy(self.cfg)
+        fetched = False
+        w = c["weather"]
+        if w["enabled"] and w["latitude"] is not None and now >= self.w["next"]:
+            self._fetch_weather(w)
+            fetched = True
+        pc = c["price"]
+        if pc["enabled"]:
+            ser = self.p["series"]
+            outdated = not ser or now >= ser[-1][0] + self.p["interval"]
+            due = now >= self.p["next"] or outdated
+            if due and now - self.p["last_try"] >= PRICE_MIN_GAP_MS and \
+                    (now >= self.p["next"] or not self.p["error"]):
+                self._fetch_price(pc["zone"])
+                fetched = True
+        if fetched or now - self.last_emit >= EMIT_EVERY_MS:
+            self._emit_all(c, now)
+            self.last_emit = now
+
+    def _fetch_weather(self, w):
+        now = now_ms()
+        fields = ",".join(f for f, _, _ in WEATHER_FIELDS.values())
+        try:
+            d = http_get_json(URL_FORECAST, {
+                "latitude": "%.4f" % w["latitude"], "longitude": "%.4f" % w["longitude"],
+                "current": fields, "wind_speed_unit": "kmh", "timezone": "auto"})
+            cur = d.get("current") if isinstance(d, dict) else None
+            if not isinstance(cur, dict):
+                raise RuntimeError("Open-Meteo lieferte keine aktuellen Werte.")
+            data = {}
+            for k, (f, _, _) in WEATHER_FIELDS.items():
+                v = cur.get(f)
+                if isinstance(v, (int, float)) and math.isfinite(v):
+                    data[k] = float(v)
+            if not data:
+                raise RuntimeError("Open-Meteo lieferte keine aktuellen Werte.")
+            with self.lock:
+                self.w.update({"data": data, "last_ok": now, "error": "",
+                               "next": now + w["interval_min"] * 60000})
+        except RuntimeError as e:
+            with self.lock:
+                self.w.update({"error": str(e), "next": now + min(RETRY_MS, w["interval_min"] * 60000)})
+            print("[Internet] Wetter:", e)
+
+    def _fetch_price(self, zone):
+        now = now_ms()
+        self.p["last_try"] = now
+        errors = []
+        series, interval, source, stats_ok = None, 0, "", False
+        try:
+            pts = parse_energy_charts(http_get_json(URL_PRICE, {"bzn": zone}))
+            if not pts:
+                raise RuntimeError("Energy-Charts lieferte keine Preise.")
+            interval = _interval_of(pts)
+            if not any(ts <= now < ts + interval for ts, _ in pts):
+                raise RuntimeError("Energy-Charts: kein Preis für den aktuellen Zeitraum.")
+            series, source, stats_ok = pts, "Energy-Charts", True
+        except RuntimeError as e:
+            errors.append(str(e))
+        if series is None and zone in URL_AWATTAR:
+            try:
+                pts, interval = parse_awattar(http_get_json(URL_AWATTAR[zone]))
+                if not any(ts <= now < ts + interval for ts, _ in pts):
+                    raise RuntimeError("aWATTar: kein Preis für den aktuellen Zeitraum.")
+                series, source = pts, "aWATTar (Ersatz)"
+            except RuntimeError as e:
+                errors.append(str(e))
+        with self.lock:
+            if series is not None:
+                self.p.update({"series": series, "interval": interval, "source": source, "zone": zone,
+                               "stats_ok": stats_ok, "last_ok": now, "error": "",
+                               "next": now + PRICE_REFRESH_MS})
+            else:
+                self.p.update({"error": " / ".join(errors), "next": now + RETRY_MS, "zone": zone})
+        for e in errors:
+            print("[Internet] Strompreis:", e)
+
+    # -- Werte erzeugen und senden --
+    def _emit(self, c, sect, key, value, unit, decimals, now):
+        item = c[sect]["values"][key]
+        if not item["enabled"]:
+            return
+        topic = join_topic(c["base_topic"], item["topic"])
+        txt = ("%.*f" % (decimals, value)) if decimals > 0 else str(int(round(value)))
+        store.update(topic, txt, source="internet", numeric=float(txt))
+        virtual.on_update(topic)
+        with self.lock:
+            self.values[(sect, key)] = {"text": txt, "unit": unit, "topic": topic}
+        self._emitted.add((sect, key))
+        if c["publish"]:
+            last = self.published.get(topic)
+            if last is None or last[0] != txt or now - last[1] >= REPUBLISH_MS:
+                try:
+                    mqtt_manager.publish(topic, txt, retain=c["retain"])
+                    self.published[topic] = (txt, now)
+                except RuntimeError:
+                    pass      # Broker getrennt -> beim naechsten Durchlauf erneut
+
+    def _emit_all(self, c, now):
+        self._emitted = set()
+        try:
+            self._emit_all_inner(c, now)
+        finally:
+            with self.lock:   # nicht mehr erzeugte Werte (z. B. veraltet) nicht mehr anzeigen
+                for k in list(self.values):
+                    if k not in self._emitted:
+                        del self.values[k]
+
+    def _emit_all_inner(self, c, now):
+        w = c["weather"]
+        if w["enabled"] and self.w["data"] and now - self.w["last_ok"] <= (3 * w["interval_min"] + 10) * 60000:
+            for k, v in self.w["data"].items():
+                _, unit, dec = WEATHER_FIELDS[k]
+                self._emit(c, "weather", k, v, unit, dec, now)
+        pc = c["price"]
+        ser, iv = self.p["series"], self.p["interval"]
+        if pc["enabled"] and ser and pc["zone"] == self.p["zone"]:
+            cur = next((pr for ts, pr in ser if ts <= now < ts + iv), None)
+            ct = pc["unit"] == "ct_kwh"
+            conv = (lambda eur_mwh: eur_mwh / 10.0) if ct else (lambda eur_mwh: eur_mwh)
+            unit = "ct/kWh" if ct else "€/MWh"
+            dec = 2 if ct else 1
+            if cur is not None:
+                self._emit(c, "price", "current", conv(cur), unit, dec, now)
+                total = (cur / 10.0 + pc["surcharge_ct"]) * (1 + pc["vat_pct"] / 100.0)
+                self._emit(c, "price", "total", total, "ct/kWh", 2, now)
+            if self.p["stats_ok"]:
+                day = cet_day(now)
+                today = [pr for ts, pr in ser if cet_day(ts) == day]
+                if today:
+                    self._emit(c, "price", "min", conv(min(today)), unit, dec, now)
+                    self._emit(c, "price", "max", conv(max(today)), unit, dec, now)
+                    self._emit(c, "price", "avg", conv(sum(today) / len(today)), unit, dec, now)
+
+    def status(self):
+        with self.lock:
+            c = self.cfg
+            vals = {"weather": {}, "price": {}}
+            for (sect, key), v in self.values.items():
+                vals[sect][key] = dict(v)
+            return {
+                "weather": {"enabled": c["weather"]["enabled"], "error": self.w["error"],
+                            "last_ok": self.w["last_ok"] or None, "location": c["weather"]["location"],
+                            "values": vals["weather"]},
+                "price": {"enabled": c["price"]["enabled"], "error": self.p["error"],
+                          "last_ok": self.p["last_ok"] or None, "source": self.p["source"],
+                          "interval_min": int(self.p["interval"] / 60000) if self.p["interval"] else None,
+                          "stats_ok": self.p["stats_ok"], "values": vals["price"]},
+            }
+
+
+# ----------------------------------------------------------------------
 # Zusammenbau
 # ----------------------------------------------------------------------
 config = ConfigStore(CONFIG_PATH, LEGACY_CONFIG_PATH)
@@ -1031,7 +1570,13 @@ _pending_self = {}           # topic -> (payload, ablauf)
 _pending_lock = threading.Lock()
 
 
+internet = InternetManager()
+
+
 def handle_mqtt_message(topic, payload_bytes):
+    if internet.is_own(topic):
+        # eigenes Internet-Topic kommt vom Broker zurueck -> lokaler Wert ist massgeblich
+        return
     try:
         payload = payload_bytes.decode("utf-8")
     except UnicodeDecodeError:
@@ -1074,6 +1619,8 @@ def api_config():
     out["version"] = APP_VERSION
     out["migrated_from_legacy"] = config.migrated_from_legacy
     out["range_choices_h"] = RANGE_CHOICES_H
+    out["price_zones"] = PRICE_ZONES
+    out["weather_intervals"] = WEATHER_INTERVALS
     return jsonify(out)
 
 
@@ -1124,7 +1671,8 @@ def api_config_upload():
         return _err(str(e))
     summary = {c: len(new[c]) for c in COLLECTIONS}
     result = {"summary": summary, "warnings": warnings, "legacy": info["legacy"],
-              "password_kept": info["password_kept"], "broker_host": new["broker"]["host"],
+              "password_kept": info["password_kept"], "internet_kept": info["internet_kept"],
+              "broker_host": new["broker"]["host"],
               "title": new["title"],
               "restart_required": new["server"]["port"] != current["server"]["port"],
               "port": new["server"]["port"]}
@@ -1146,6 +1694,7 @@ def api_config_upload():
     if broker_changed:
         mqtt_manager.start(new["broker"])
     virtual.rebuild(config.snapshot())
+    internet.configure(new["internet"])
     print("[Config] Konfiguration hochgeladen und uebernommen (Sicherung: %s)" % backup)
     return jsonify(dict(result, ok=True, backup=os.path.basename(backup), broker_changed=broker_changed))
 
@@ -1215,7 +1764,53 @@ def api_status():
         st = store.get_state(vt["name"])
         vstate[vt["id"]] = {"value": st["value"] if st else None, "error": errors.get(vt["id"])}
     return jsonify({"broker": mqtt_manager.status(), "topic_count": store.count(),
-                    "virtual": vstate, "now": now_ms()})
+                    "virtual": vstate, "internet": internet.status(), "now": now_ms()})
+
+
+@app.route("/api/internet", methods=["PUT"])
+def api_internet_save():
+    data = request.get_json(silent=True) or {}
+    try:
+        clean = clean_internet(data, strict=True)
+    except ValueError as e:
+        return _err(str(e))
+    with config.lock:
+        config.cfg["internet"] = clean
+        config.save()
+    internet.configure(clean)
+    return jsonify({"ok": True, "internet": clean})
+
+
+@app.route("/api/internet/refresh", methods=["POST"])
+def api_internet_refresh():
+    internet.refresh_now()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/internet/geocode", methods=["GET"])
+def api_internet_geocode():
+    name = _str(request.args.get("name"), 100)
+    if len(name) < 2:
+        return _err("Bitte mindestens zwei Zeichen für den Ort eingeben.")
+    try:
+        d = http_get_json(URL_GEOCODE, {"name": name, "count": 8, "language": "de", "format": "json"})
+    except RuntimeError as e:
+        return _err(str(e), 502)
+    out = []
+    for r in (d.get("results") if isinstance(d, dict) else None) or []:
+        try:
+            lat, lon = float(r["latitude"]), float(r["longitude"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        parts = [r.get("name") or ""]
+        for k in ("admin2", "admin1", "country"):
+            if r.get(k) and r.get(k) not in parts:
+                parts.append(r[k])
+        if r.get("postcodes"):
+            parts[0] = "%s (%s)" % (parts[0], r["postcodes"][0])
+        out.append({"label": ", ".join(p for p in parts if p), "name": r.get("name") or "",
+                    "latitude": round(lat, 4), "longitude": round(lon, 4)})
+    return jsonify({"results": out})
 
 
 @app.route("/api/topics", methods=["GET"])
@@ -1714,6 +2309,25 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .manage-actions{ width:100%; margin-top:6px; }
   }
 
+  .inet-block{ border:1px solid var(--border); border-radius:8px; padding:14px 16px 6px; margin:6px 0 16px; background:#0f1216; }
+  .inet-head{ font-size:13.5px !important; color:var(--text) !important; }
+  .inet-rows{ margin:2px 0 6px; }
+  .inet-row{
+    display:-webkit-box; display:-webkit-flex; display:flex; -webkit-align-items:center; align-items:center;
+    -webkit-flex-wrap:wrap; flex-wrap:wrap; padding:6px 0; border-top:1px dashed #1b2027;
+  }
+  .inet-row .checkbox-row{ margin:0 12px 0 0 !important; width:220px; -webkit-flex-shrink:0; flex-shrink:0; }
+  .inet-row input.inet-topic{ -webkit-flex:1; flex:1; min-width:160px; padding:6px 8px; font-size:12px; }
+  .inet-row .inet-full{ font-family:var(--mono); font-size:10.5px; color:var(--text-dim); width:100%; margin:4px 0 0 232px; word-break:break-all; }
+  .inet-row .inet-val{ font-family:var(--mono); font-size:13px; color:var(--accent-2); min-width:110px; text-align:right; margin-left:12px; white-space:nowrap; }
+  .inet-results{ border:1px solid var(--border); border-radius:6px; margin:-2px 0 8px; background:#0d1014; }
+  #settingsPanel a{ color:var(--info); }
+  @media(max-width:600px){
+    .inet-row .checkbox-row{ width:100%; }
+    .inet-row .inet-full{ margin-left:0; }
+    .inet-row .inet-val{ text-align:left; margin-left:0; margin-top:4px; }
+  }
+
   /* ---------------- Modals (wie MK6) ---------------- */
   .modal-backdrop{
     display:none; position:fixed; left:0; top:0; right:0; bottom:0; background:rgba(0,0,0,.6);
@@ -1888,6 +2502,62 @@ INDEX_HTML = r"""<!DOCTYPE html>
     </div>
     <button class="btn" onclick="openVirtualModal(null)">+ Virtuelles Topic hinzuf&uuml;gen</button>
     <div id="virtualManageList" style="margin-top:14px;"></div>
+  </div>
+
+  <div class="settings-section" id="internetSection">
+    <h2>Internet-Topics</h2>
+    <div class="hint-text">
+      Virtuelle Topics, deren Werte aus dem Internet kommen. Sie stehen wie normale Topics f&uuml;r
+      Diagramme, Anzeigen und virtuelle Topics zur Verf&uuml;gung und werden auf Wunsch unter der
+      eingestellten Topic-Struktur an den MQTT-Broker gesendet. Der Brume&nbsp;2 bzw. PC braucht dazu Internet.
+    </div>
+    <div class="field-grid">
+      <div class="fld"><label>Basis-Topic</label><input id="in_base" placeholder="dashboard/internet" oninput="updateInetPreview()"></div>
+    </div>
+    <label class="checkbox-row"><input type="checkbox" id="in_publish"> Werte an den MQTT-Broker senden</label>
+    <label class="checkbox-row"><input type="checkbox" id="in_retain"> mit Retain-Flag senden (neue Abonnenten erhalten sofort den letzten Wert)</label>
+
+    <div class="inet-block">
+      <label class="checkbox-row inet-head"><input type="checkbox" id="iw_enabled"> <b>Wetter</b>&nbsp;(Open-Meteo)</label>
+      <div class="settings-inline-form">
+        <input id="iw_query" placeholder="Ort oder PLZ, z. B. Hamburg" onkeydown="if(event.keyCode===13) searchLocation()">
+        <button class="btn btn-ghost" onclick="searchLocation()">Ort suchen</button>
+        <select id="iw_interval" title="Abrufintervall"></select>
+      </div>
+      <div class="discover-list inet-results" id="iw_results" style="display:none;"></div>
+      <div class="status-line" id="iw_selected"></div>
+      <div id="iw_rows" class="inet-rows"></div>
+      <div class="status-line" id="iw_status"></div>
+    </div>
+
+    <div class="inet-block">
+      <label class="checkbox-row inet-head"><input type="checkbox" id="ip_enabled"> <b>Strompreis</b>&nbsp;(EPEX Day-Ahead)</label>
+      <div class="field-grid">
+        <div class="fld"><label>Gebotszone</label><select id="ip_zone"></select></div>
+        <div class="fld narrow"><label>Einheit</label>
+          <select id="ip_unit"><option value="ct_kwh">ct/kWh</option><option value="eur_mwh">&euro;/MWh</option></select></div>
+        <div class="fld narrow"><label>Aufschlag ct/kWh</label><input id="ip_surcharge" inputmode="decimal" placeholder="0"></div>
+        <div class="fld narrow"><label>MwSt %</label><input id="ip_vat" inputmode="decimal" placeholder="19"></div>
+      </div>
+      <div class="hint-text" style="margin-top:-6px;">
+        Aktuell/Minimum/Maximum/Mittel sind reine B&ouml;rsenpreise (netto, ohne Netzentgelte, Steuern und
+        Abgaben). Der <b>Endpreis</b> rechnet <code>(B&ouml;rsenpreis + Aufschlag) &times; (1 + MwSt)</code> in ct/kWh &ndash;
+        als Aufschlag z.&nbsp;B. Netzentgelt, Umlagen und Arbeitspreis-Aufschlag des Stromanbieters eintragen.
+      </div>
+      <div id="ip_rows" class="inet-rows"></div>
+      <div class="status-line" id="ip_status"></div>
+    </div>
+
+    <div class="settings-inline-form" style="margin-top:6px;">
+      <button class="btn" onclick="saveInternet()">Internet-Topics speichern</button>
+      <button class="btn btn-ghost" onclick="refreshInternet()">Jetzt abrufen</button>
+    </div>
+    <div class="hint-text" style="margin:8px 0 0;">
+      Wetterdaten: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo.com</a> (CC&nbsp;BY&nbsp;4.0).
+      Strompreise: <a href="https://www.energy-charts.info/" target="_blank" rel="noopener">Energy-Charts / Fraunhofer ISE</a>
+      (DE-LU: Bundesnetzagentur | SMARD.de, CC&nbsp;BY&nbsp;4.0; andere Zonen nur f&uuml;r private/interne Nutzung),
+      Ersatzquelle f&uuml;r DE-LU/AT: aWATTar.
+    </div>
   </div>
 
   <div class="settings-section">
@@ -2393,7 +3063,7 @@ function updateTiles(){
     var tb = $("tb_" + w.id);
     if(tb){ tb.textContent = on ? "an" : "aus"; tb.style.backgroundColor = on ? dev.color : ""; }
     var src = $("tsrc_" + w.id);
-    src.textContent = !st ? "" : (st.source === "self" ? "● eigen" : (st.source === "virtual" ? "◆ virtuell" : "○ extern"));
+    src.textContent = !st ? "" : (st.source === "self" ? "● eigen" : (st.source === "virtual" ? "◆ virtuell" : (st.source === "internet" ? "◆ Internet" : "○ extern")));
     if(w.type === "slider" && st && st.numeric !== null && st.numeric !== undefined){
       var busy = APP.sliderBusy[w.id] && (Date.now() - APP.sliderBusy[w.id] < 2500);
       if(!busy) $("ts_" + w.id).value = st.numeric;
@@ -2742,6 +3412,7 @@ function enterSettingsMode(){
   loadConfig(function(){
     fillBrokerForm();
     fillGeneralForm();
+    fillInternetForm();
     refreshSettingsLists();
     $("migrationNotice").style.display = APP.cfg.migrated_from_legacy ? "block" : "none";
   });
@@ -2775,6 +3446,7 @@ function pollStatus(){
       else if(b.connected){ el.className = "status-line ok"; el.textContent = "● Verbunden mit " + b.host + ":" + b.port + " · " + d.topic_count + " Topics empfangen"; }
       else { el.className = "status-line err"; el.textContent = "○ Nicht verbunden mit " + b.host + ":" + b.port + (b.error ? " – " + b.error : ""); }
       APP.vstatus = d.virtual;
+      updateInternetStatus(d.internet);
       updateVirtualStatus();
     }
     APP.statusTimer = setTimeout(pollStatus, 3000);
@@ -2785,6 +3457,158 @@ function pollStatus(){
 function updateDownloadLink(){
   $("dl_link").href = "/api/config/download" + ($("dl_pw").checked ? "?password=1" : "");
 }
+/* ------------------------------------------------ Internet-Topics */
+var WEATHER_META = [["temperature", "Temperatur"], ["apparent", "Gef\u00fchlte Temperatur"],
+                    ["humidity", "Luftfeuchte"], ["wind", "Windgeschwindigkeit"]];
+var PRICE_META = [["current", "Aktueller Preis"], ["min", "Heute Minimum"], ["max", "Heute Maximum"],
+                  ["avg", "Heute Mittelwert"], ["total", "Endpreis (Aufschlag + MwSt)"]];
+var INET = { loc: null };
+function inetRowsHtml(prefix, meta, values){
+  var h = "";
+  for(var i = 0; i < meta.length; i++){
+    var k = meta[i][0], v = values[k] || { enabled: false, topic: "" };
+    h += '<div class="inet-row"><label class="checkbox-row"><input type="checkbox" id="' + prefix + '_en_' + k + '"' + (v.enabled ? " checked" : "") +
+      ' onchange="updateInetPreview()"> ' + meta[i][1] + "</label>" +
+      '<input class="inet-topic" id="' + prefix + '_tp_' + k + '" value="' + esc(v.topic) + '" oninput="updateInetPreview()" placeholder="Unter-Topic">' +
+      '<span class="inet-val" id="' + prefix + '_val_' + k + '">&ndash;</span>' +
+      '<span class="inet-full" id="' + prefix + '_full_' + k + '"></span></div>';
+  }
+  return h;
+}
+function fillInternetForm(){
+  var c = APP.cfg.internet, i, h;
+  $("in_base").value = c.base_topic;
+  $("in_publish").checked = !!c.publish;
+  $("in_retain").checked = !!c.retain;
+  $("iw_enabled").checked = !!c.weather.enabled;
+  $("iw_query").value = "";
+  $("iw_results").style.display = "none";
+  INET.loc = c.weather.latitude !== null && c.weather.latitude !== undefined
+    ? { label: c.weather.location, latitude: c.weather.latitude, longitude: c.weather.longitude } : null;
+  showSelectedLocation();
+  h = "";
+  var ivs = APP.cfg.weather_intervals || [5, 10, 15, 30, 60];
+  for(i = 0; i < ivs.length; i++) h += '<option value="' + ivs[i] + '"' + (ivs[i] === c.weather.interval_min ? " selected" : "") + ">alle " + ivs[i] + " min</option>";
+  $("iw_interval").innerHTML = h;
+  $("iw_rows").innerHTML = inetRowsHtml("iw", WEATHER_META, c.weather.values);
+  $("ip_enabled").checked = !!c.price.enabled;
+  h = "";
+  var zs = APP.cfg.price_zones || [["DE-LU", "Deutschland / Luxemburg"]];
+  for(i = 0; i < zs.length; i++) h += '<option value="' + esc(zs[i][0]) + '"' + (zs[i][0] === c.price.zone ? " selected" : "") + ">" + esc(zs[i][1]) + " (" + esc(zs[i][0]) + ")</option>";
+  $("ip_zone").innerHTML = h;
+  $("ip_unit").value = c.price.unit;
+  $("ip_surcharge").value = String(c.price.surcharge_ct).replace(".", ",");
+  $("ip_vat").value = String(c.price.vat_pct).replace(".", ",");
+  $("ip_rows").innerHTML = inetRowsHtml("ip", PRICE_META, c.price.values);
+  updateInetPreview();
+}
+function showSelectedLocation(){
+  var el = $("iw_selected");
+  if(INET.loc){
+    el.className = "status-line ok";
+    el.textContent = "Ort: " + (INET.loc.label || "") + " (" + fmtNum(INET.loc.latitude, 2) + "\u00b0, " + fmtNum(INET.loc.longitude, 2) + "\u00b0)";
+  } else { el.className = "status-line"; el.textContent = "Noch kein Ort gew\u00e4hlt."; }
+}
+function inetFullTopic(sub){
+  var base = $("in_base").value.replace(/^\/+|\/+$/g, "");
+  sub = (sub || "").replace(/^\/+|\/+$/g, "");
+  return base ? base + "/" + sub : sub;
+}
+function updateInetPreview(){
+  var groups = [["iw", WEATHER_META], ["ip", PRICE_META]];
+  for(var g = 0; g < groups.length; g++){
+    for(var i = 0; i < groups[g][1].length; i++){
+      var k = groups[g][1][i][0], p = groups[g][0];
+      var en = $(p + "_en_" + k), full = $(p + "_full_" + k);
+      if(!en || !full) continue;
+      full.textContent = en.checked ? "\u2192 " + inetFullTopic($(p + "_tp_" + k).value) : "";
+      full.style.display = en.checked ? "" : "none";
+    }
+  }
+}
+function searchLocation(){
+  var q = $("iw_query").value.replace(/^\s+|\s+$/g, ""), box = $("iw_results");
+  if(q.length < 2){ showToast("Bitte einen Ort oder eine PLZ eingeben.", "err"); return; }
+  box.style.display = "block";
+  box.innerHTML = '<div class="discover-empty">Suche \u2026</div>';
+  api("GET", "/api/internet/geocode?name=" + encodeURIComponent(q), null, function(err, d){
+    if(err){ box.innerHTML = '<div class="discover-empty" style="color:var(--danger)">' + esc(err) + "</div>"; return; }
+    INET.results = d.results;
+    if(!d.results.length){ box.innerHTML = '<div class="discover-empty">Kein Ort gefunden.</div>'; return; }
+    var h = "";
+    for(var i = 0; i < d.results.length; i++){
+      var r = d.results[i];
+      h += '<div class="discover-row" onclick="pickLocation(' + i + ')"><span class="dv-t">' + esc(r.label) + '</span><span class="dv-v">' +
+        fmtNum(r.latitude, 2) + "\u00b0, " + fmtNum(r.longitude, 2) + "\u00b0</span></div>";
+    }
+    box.innerHTML = h;
+  });
+}
+function pickLocation(i){
+  var r = INET.results[i];
+  INET.loc = { label: r.label, latitude: r.latitude, longitude: r.longitude };
+  $("iw_results").style.display = "none";
+  $("iw_enabled").checked = true;
+  showSelectedLocation();
+}
+function collectInetValues(prefix, meta){
+  var out = {};
+  for(var i = 0; i < meta.length; i++){
+    var k = meta[i][0];
+    out[k] = { enabled: $(prefix + "_en_" + k).checked, topic: $(prefix + "_tp_" + k).value };
+  }
+  return out;
+}
+function saveInternet(){
+  var payload = {
+    base_topic: $("in_base").value, publish: $("in_publish").checked, retain: $("in_retain").checked,
+    weather: { enabled: $("iw_enabled").checked, location: INET.loc ? INET.loc.label : "",
+               latitude: INET.loc ? INET.loc.latitude : null, longitude: INET.loc ? INET.loc.longitude : null,
+               interval_min: parseInt($("iw_interval").value, 10), values: collectInetValues("iw", WEATHER_META) },
+    price: { enabled: $("ip_enabled").checked, zone: $("ip_zone").value, unit: $("ip_unit").value,
+             surcharge_ct: $("ip_surcharge").value, vat_pct: $("ip_vat").value, values: collectInetValues("ip", PRICE_META) }
+  };
+  api("PUT", "/api/internet", payload, function(err){
+    if(err){ showToast(err, "err"); return; }
+    showToast("Internet-Topics gespeichert \u2013 Werte werden abgerufen \u2026");
+    loadConfig(function(){ fillInternetForm(); });
+    setTimeout(pollStatus, 2500);
+    setTimeout(pollStatus, 6000);
+  });
+}
+function refreshInternet(){
+  api("POST", "/api/internet/refresh", null, function(err){
+    if(err){ showToast(err, "err"); return; }
+    showToast("Abruf gestartet \u2026");
+    setTimeout(pollStatus, 2500);
+  });
+}
+function fmtAgo(ms){
+  if(!ms) return "";
+  var d = new Date(ms);
+  return fmtDay(ms) + " " + fmtClock(ms);
+}
+function updateInternetStatus(st){
+  if(!st || !$("iw_status")) return;
+  var parts = [["iw", "weather", WEATHER_META], ["ip", "price", PRICE_META]];
+  for(var p = 0; p < parts.length; p++){
+    var pre = parts[p][0], s = st[parts[p][1]], meta = parts[p][2], el = $(pre + "_status");
+    for(var i = 0; i < meta.length; i++){
+      var v = s.values[meta[i][0]], ve = $(pre + "_val_" + meta[i][0]);
+      if(ve) ve.textContent = v ? v.text.replace(".", ",") + " " + v.unit : "\u2013";
+    }
+    if(!s.enabled){ el.className = "status-line"; el.textContent = "Ausgeschaltet."; }
+    else if(s.error){ el.className = "status-line err"; el.textContent = "\u25cb " + s.error + (s.last_ok ? " (letzter Erfolg: " + fmtAgo(s.last_ok) + ")" : ""); }
+    else if(s.last_ok){
+      el.className = "status-line ok";
+      el.textContent = "\u25cf Zuletzt abgerufen: " + fmtAgo(s.last_ok) +
+        (s.source ? " \u00b7 Quelle: " + s.source : "") + (s.interval_min ? " \u00b7 Preisraster " + s.interval_min + " min" : "") +
+        (parts[p][1] === "price" && !s.stats_ok ? " \u00b7 Min/Max/Mittel nur mit Energy-Charts" : "");
+    }
+    else { el.className = "status-line"; el.textContent = "Noch nicht abgerufen \u2013 erster Abruf l\u00e4uft \u2026"; }
+  }
+}
+
 function uploadSummaryText(d){
   var sm = d.summary, parts = [];
   parts.push(sm.groups + (sm.groups === 1 ? " Gruppe" : " Gruppen"));
@@ -2809,6 +3633,7 @@ function uploadConfigFile(inp){
       var msg = "Konfiguration aus \u201e" + f.name + "\u201c \u00fcbernehmen?\n\n" +
         "Titel: " + d.title + "\nBroker: " + (d.broker_host || "(keiner)") + "\n" + uploadSummaryText(d) + "\n";
       if(d.legacy) msg += "\nDatei im v1.x-Format \u2013 wird umgewandelt.";
+      if(d.internet_kept) msg += "\nDie Datei enth\u00e4lt keine Internet-Topics \u2013 die aktuellen bleiben erhalten.";
       if(d.password_kept) msg += "\nDas gespeicherte Broker-Passwort bleibt erhalten.";
       if(d.restart_required) msg += "\nNeuer Webserver-Port " + d.port + " gilt erst nach einem Neustart.";
       if(d.warnings.length){
@@ -2826,7 +3651,7 @@ function uploadConfigFile(inp){
         showToast("Konfiguration \u00fcbernommen." + (r.restart_required ? " Neuer Port gilt nach einem Neustart." : ""));
         APP.data = {}; APP.states = {};
         loadConfig(function(){
-          fillBrokerForm(); fillGeneralForm(); refreshSettingsLists();
+          fillBrokerForm(); fillGeneralForm(); fillInternetForm(); refreshSettingsLists();
           $("migrationNotice").style.display = "none";
         });
         setTimeout(pollStatus, 1200);
@@ -3006,7 +3831,7 @@ function renderDiscover(prefix){
     if(f && t.topic.toLowerCase().indexOf(f) < 0) continue;
     n++;
     h += '<div class="discover-row" data-t="' + esc(t.topic) + '" onclick="' + DISCOVER_PICK[prefix] + '(this.getAttribute(\'data-t\'))">' +
-      '<span class="dv-t">' + esc(t.topic) + (t.source === "virtual" ? " ◆" : "") + '</span><span class="dv-v">' + esc(t.value) + "</span></div>";
+      '<span class="dv-t">' + esc(t.topic) + (t.source === "virtual" ? " ◆" : (t.source === "internet" ? " \u25c6 Internet" : "")) + '</span><span class="dv-v">' + esc(t.value) + "</span></div>";
   }
   list.innerHTML = h || '<div class="discover-empty">' + (APP.topics.length ? "Keine passenden Topics." : "Noch keine Topics empfangen - Broker verbunden?") + "</div>";
 }
@@ -3352,6 +4177,8 @@ def main():
     host = cfg["server"].get("host", "0.0.0.0")
     port = int(cfg["server"].get("port", 5001))
     virtual.rebuild(cfg)
+    internet.configure(cfg["internet"])
+    internet.start()
 
     def _compactor():
         while True:

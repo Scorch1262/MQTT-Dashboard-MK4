@@ -59,6 +59,11 @@ ohnehin geleert, das Programm liegt in `/root/MQTT-Dashboard-MK4`.
 
 ## Schritt 3 – Einrichten
 
+> Für die **Internet-Topics** (Wetter, Strompreis) braucht der Brume 2
+> eine Internetverbindung. Die Zertifikate für HTTPS bringt das
+> Dashboard selbst mit (`vendor/certifi`), ein `ca-bundle` ist nicht nötig.
+
+
 Webseite im Browser öffnen. Beim ersten Start öffnen sich direkt die
 **Einstellungen**: MQTT-Broker eintragen (läuft Mosquitto auf demselben
 Brume 2: `127.0.0.1`), danach Diagramme, Schalter und Anzeigen anlegen.

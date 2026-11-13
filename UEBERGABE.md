@@ -16,6 +16,7 @@ Eine Datei `app.py`, Aufbau von oben nach unten:
 | `ConfigStore` | Laden/Normalisieren/atomares Speichern (`.tmp` + `os.replace`), defekte Datei wird als `config.json.defekt-<ts>` gesichert |
 | `TopicStore`, `_Series` | Werte + Verlauf im Speicher, je Topic drei Zeitstufen: letzte Stunde jeder Punkt (max. 1/s), bis 12 h min/max je 15 s, bis 49 h min/max je 60 s (`_compact_into()`); Verdichtung beim Schreiben alle 10 s und per Hintergrund-Thread jede Minute |
 | `VirtualEngine` | berechnet virtuelle Topics bei Änderung einer Quelle (bis Tiefe 3, virtuell auf virtuell möglich) |
+| `InternetManager`, `clean_internet()` | Internet-Topics: Hintergrund-Thread, Open-Meteo (Wetter), Energy-Charts (EPEX, Ersatz aWATTar), Werte jede Minute in den `TopicStore`, Senden an den Broker bei Änderung bzw. alle 10 min; eigene Topics vom Broker werden ignoriert (`is_own`) |
 | `MqttManager` | paho-Client mit `loop_start`, Auto-Reconnect, Neustart bei Broker-Änderung; 1.6.x und 2.x kompatibel |
 | REST-API | siehe unten |
 | `INDEX_HTML` | komplettes Frontend (CSS/HTML/JS), wird **nicht** durch Jinja geschickt |
@@ -28,6 +29,9 @@ Eine Datei `app.py`, Aufbau von oben nach unten:
 | `GET /api/config` | komplette Konfiguration (Passwort entfernt, `password_set`) |
 | `GET /api/config/download[?password=1]` | Konfiguration als Datei (Format = `config.json`), Passwort nur mit `password=1` |
 | `POST /api/config/upload` | Konfiguration hochladen (`{config, dry_run}`), `import_config()` prüft jeden Eintrag mit den normalen Validatoren, Sicherung `config.json.vor-import-<Zeit>` |
+| `PUT /api/internet` | Internet-Topics speichern (`clean_internet(strict=True)`) |
+| `POST /api/internet/refresh` | sofort neu abrufen |
+| `GET /api/internet/geocode?name=` | Ortssuche über Open-Meteo (Server ruft ab, nicht der Browser) |
 | `PUT /api/settings` | Titel, Port, Standard-Zeitraum |
 | `PUT /api/broker` | Broker ändern → sofortiger Reconnect |
 | `GET /api/status` | Brokerstatus, Topic-Anzahl, Werte/Fehler der virtuellen Topics |
@@ -65,6 +69,26 @@ Eine Datei `app.py`, Aufbau von oben nach unten:
   weiter funktionieren; jetzt in den Einstellungen änderbar.
 
 ## Versionshistorie
+
+### v2.1.0
+- **Internet-Topics:** Wetter (Open-Meteo: Temperatur, gefühlte Temperatur,
+  Luftfeuchte, Wind; Ort per Suche) und EPEX-Day-Ahead-Strompreis
+  (Energy-Charts, Ersatz aWATTar für DE-LU/AT: aktuell, heute
+  Min/Max/Mittel, Endpreis mit Aufschlag + MwSt). Topic = Basis-Topic +
+  Unter-Topic, beides einstellbar; optional an den Broker senden (Retain).
+- Abrufregeln: Wetter im eingestellten Intervall, Preise stündlich bzw.
+  sobald die geladenen Daten den aktuellen Zeitpunkt nicht mehr abdecken,
+  min. 60 s Abstand (Energy-Charts erlaubt 2 Abrufe/min), nach Fehler 5 min.
+  „Heute“ für Min/Max/Mittel per MEZ/MESZ-Berechnung ohne `zoneinfo`
+  (fehlt unter Windows/OpenWrt häufig); aWATTar liefert nur den aktuellen Preis.
+- HTTPS über `urllib` mit Zertifikaten aus `certifi` (neu in `vendor/`
+  und `requirements.txt`) – nötig für Brume 2 ohne ca-bundle und die macOS-App.
+- Konfigurations-Upload: fehlt der Internet-Bereich (ältere Dateien, v1.x),
+  bleiben die aktuellen Internet-Einstellungen erhalten.
+- **Tests ohne Internet:** Die Quell-URLs lassen sich per
+  Umgebungsvariable auf einen Nachbau umbiegen: `MQTTDASH_URL_FORECAST`,
+  `MQTTDASH_URL_GEOCODE`, `MQTTDASH_URL_PRICE`, `MQTTDASH_URL_AWATTAR_DE`,
+  `MQTTDASH_URL_AWATTAR_AT`.
 
 ### v2.0.5
 - Einstellungen: Konfiguration **hochladen** (Bereich heißt jetzt

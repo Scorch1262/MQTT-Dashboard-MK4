@@ -25,6 +25,7 @@ GitHub Actions.
 - [3. Diagramme](#3-diagramme)
 - [4. Schalter, Slider & Anzeigen](#4-schalter-slider--anzeigen)
 - [5. Virtuelle Topics](#5-virtuelle-topics)
+- [5a. Internet-Topics (Wetter & Strompreis)](#5a-internet-topics-wetter--strompreis)
 - [6. Konfigurationsdatei & Umstieg von v1.x](#6-konfigurationsdatei--umstieg-von-v1x)
 - [7. Grenzen & Hinweise](#7-grenzen--hinweise)
 
@@ -162,6 +163,39 @@ sind `+ - * / // % **`, Vergleiche, `x if bedingung else y` sowie
 Topics stehen danach wie normale Topics für Diagramme und Anzeigen zur
 Verfügung.
 
+## 5a. Internet-Topics (Wetter & Strompreis)
+
+Virtuelle Topics, deren Werte aus dem Internet kommen – einzustellen
+unter **Einstellungen → Internet-Topics**. Kein Konto und kein
+API-Schlüssel nötig; das Gerät (PC bzw. Brume 2) braucht Internet.
+
+| Quelle | Werte | Abruf |
+|---|---|---|
+| **Wetter** – [Open-Meteo](https://open-meteo.com/) | Temperatur, gefühlte Temperatur, Luftfeuchte, Windgeschwindigkeit am gewählten Ort | alle 5–60 min (einstellbar) |
+| **Strompreis** – EPEX Day-Ahead über [Energy-Charts / Fraunhofer ISE](https://www.energy-charts.info/), Ersatz für DE-LU/AT: aWATTar | aktueller Preis, heute Minimum/Maximum/Mittel, Endpreis | stündlich, aktueller Preis wird jede Minute fortgeschrieben (15-min-Raster) |
+
+- **Ort:** Name oder PLZ eingeben, „Ort suchen“, Treffer antippen.
+- **Strompreis:** Gebotszone wählen (DE-LU, AT, CH, NL, …), Einheit
+  ct/kWh oder €/MWh. Börsenpreise sind netto, ohne Netzentgelte, Steuern
+  und Abgaben. Der **Endpreis** rechnet `(Börsenpreis + Aufschlag) × (1 + MwSt)`
+  in ct/kWh – Aufschlag und MwSt sind einstellbar.
+- **Topic-Struktur:** Jedes Topic setzt sich aus dem **Basis-Topic**
+  (Standard `dashboard/internet`) und einem frei änderbaren
+  **Unter-Topic** je Wert zusammen, z. B. `dashboard/internet/wetter/temperatur`
+  oder `dashboard/internet/strompreis/aktuell`. Die Vorschau zeigt das
+  vollständige Topic.
+- **Ins MQTT-System senden:** Mit „Werte an den MQTT-Broker senden“
+  (optional mit Retain) werden die Werte unter diesen Topics
+  veröffentlicht – bei jeder Änderung, sonst spätestens alle 10 min.
+  Andere Geräte (Ablaufplaner, Home Assistant, Tasmota-Regeln …) können
+  sie dann abonnieren.
+- In Diagrammen, Anzeigen und virtuellen Topics stehen die Werte wie
+  normale Topics zur Auswahl (markiert mit „◆ Internet“).
+
+Datenlizenzen: Open-Meteo CC BY 4.0; Strompreise DE-LU von
+Bundesnetzagentur | SMARD.de (CC BY 4.0), andere Zonen nur für private
+bzw. interne Nutzung.
+
 ## 6. Konfigurationsdatei & Umstieg von v1.x
 
 Alles liegt menschenlesbar in **`config.json`** neben der exe bzw.
@@ -198,6 +232,8 @@ Topics). Die alte Datei bleibt unverändert. Der Port bleibt **5001**.
   ältere Werte als Minimum/Maximum je 15 s (bis 12 h) bzw. je 60 s
   (bis 48 h) – Spitzen bleiben also sichtbar.
 - Es wird `#` abonniert, also alle Topics des Brokers.
+- Internet-Topics brauchen eine Internetverbindung; ohne Verbindung
+  bleiben die letzten Werte bis zu ca. 3 Abrufintervalle stehen.
 - Kein TLS zum Broker (wie v1.9).
 - Ein geänderter Webserver-Port gilt erst nach einem Neustart.
 - Keine Anmeldung am Dashboard – nur im vertrauenswürdigen LAN betreiben.
