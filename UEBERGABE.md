@@ -70,6 +70,19 @@ Eine Datei `app.py`, Aufbau von oben nach unten:
 
 ## Versionshistorie
 
+### v2.2.0
+- Diagramme: **Einheit je Topic** (`series[].unit`, leer = `chart.unit` als
+  Standard-Einheit) und **Y-Achse je Topic** (`series[].axis`: `auto`/`left`/`right`).
+  `auto`: gleiche wirksame Einheit wie das erste Topic → links, sonst rechts.
+  Liegen alle Topics rechts, wird nur eine (linke) Achse gezeichnet.
+  Zweite Achse mit eigener Skala und eigenen Grenzen (`y2_min`/`y2_max`),
+  Raster nur von der linken Achse, Einheiten über den Achsen.
+  Legende, Tooltip, Kartenkopf und Einstellungsliste zeigen die Einheit je Topic.
+  Frontend: `seriesUnit()`, `seriesAxes()`, `makeAxis()` in `drawChart()`.
+- Fehler behoben: Diagramme ohne gespeicherte Y-Grenzen (v1.x-Import, von
+  Hand bearbeitete `config.json`) zeigten im Bearbeiten-Dialog „undefined“
+  im Y-Feld; Speichern war dann nicht möglich.
+
 ### v2.1.0
 - **Internet-Topics:** Wetter (Open-Meteo: Temperatur, gefühlte Temperatur,
   Luftfeuchte, Wind; Ort per Suche) und EPEX-Day-Ahead-Strompreis

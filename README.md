@@ -121,13 +121,22 @@ Ein Diagramm kann jederzeit nachträglich bearbeitet werden:
 | Einstellung | Bedeutung |
 |---|---|
 | Name, Gruppe | Überschrift und Gruppe in der Ansicht |
-| Topics & Linienfarben | bis zu 12 Topics, je mit optionaler Bezeichnung und frei wählbarer Farbe |
-| Einheit | erscheint in Legende und Tooltip |
-| Y-Minimum / Y-Maximum | feste Achse, leer = automatisch |
+| Topics & Linienfarben | bis zu 12 Topics, je mit optionaler Bezeichnung, **eigener Einheit**, **Y-Achse** (auto/links/rechts) und frei wählbarer Farbe |
+| Standard-Einheit | gilt für alle Topics ohne eigene Einheit; erscheint in Legende, Tooltip und über der Achse |
+| Y-Min/Max links, Y-Min/Max rechts | feste Achsengrenzen je Achse, leer = automatisch |
 | Höhe | Klein / Mittel / Groß |
 | Linienart | Linie oder **Stufen** (ideal für Schaltzustände 0/1) |
 | Zeitraum | wie Ansicht, oder fest 1/6/12/24/48 h für dieses Diagramm |
 | Fläche füllen | halbtransparente Fläche unter den Linien |
+
+**Unterschiedliche Einheiten in einem Diagramm:** Jedes Topic kann eine
+eigene Einheit haben, z. B. Temperatur in °C und Luftfeuchte in % oder
+Leistung in W und Strompreis in ct/kWh. Bei Achse „auto“ kommen alle
+Topics mit derselben Einheit wie das erste Topic an die linke Y-Achse,
+Topics mit anderer Einheit an eine **zweite Y-Achse rechts** mit eigener
+Skala. Die Einheiten stehen über den Achsen (bei zwei Achsen in der Farbe
+des jeweils ersten Topics). Die Zuordnung lässt sich je Topic fest auf
+„links“ oder „rechts“ stellen.
 
 Im Dialog werden alle empfangenen Zahlen-Topics mit aktuellem Wert
 gelistet – antippen fügt sie hinzu (Filterfeld oberhalb). In der Ansicht

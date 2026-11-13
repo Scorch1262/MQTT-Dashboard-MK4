@@ -27,7 +27,7 @@ Versionierung: APP_VERSION ist die einzige Quelle der Wahrheit - der
 GitHub-Actions-Workflow liest sie aus und benennt Release/Tag danach.
 """
 
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.2.0"
 
 import os
 import sys
@@ -324,10 +324,15 @@ def validate_chart(data, cfg, item_id=None):
         topic = _str(s.get("topic"), 300)
         if not topic:
             continue
+        axis = _str(s.get("axis"), 8)
         series.append({
             "topic": topic,
             "label": _str(s.get("label"), 60),
             "color": _hex_color(s.get("color"), GROUP_PALETTE[i % len(GROUP_PALETTE)]),
+            # v2.2.0: eigene Einheit je Topic (leer = Standard-Einheit des Diagramms)
+            # und Y-Achse: auto (andere Einheit als 1. Topic -> rechts), left, right
+            "unit": _str(s.get("unit"), 16),
+            "axis": axis if axis in ("auto", "left", "right") else "auto",
         })
     if not series:
         raise ValueError("Bitte mindestens ein Topic für das Diagramm angeben.")
@@ -336,7 +341,11 @@ def validate_chart(data, cfg, item_id=None):
     y_min = _float_or_none(data.get("y_min"))
     y_max = _float_or_none(data.get("y_max"))
     if y_min is not None and y_max is not None and y_min >= y_max:
-        raise ValueError("Y-Minimum muss kleiner als Y-Maximum sein.")
+        raise ValueError("Y-Min links muss kleiner als Y-Max links sein.")
+    y2_min = _float_or_none(data.get("y2_min"))
+    y2_max = _float_or_none(data.get("y2_max"))
+    if y2_min is not None and y2_max is not None and y2_min >= y2_max:
+        raise ValueError("Y-Min rechts muss kleiner als Y-Max rechts sein.")
     range_h = data.get("range_h")
     try:
         range_h = int(range_h) if range_h not in (None, "", 0, "0") else None
@@ -352,6 +361,8 @@ def validate_chart(data, cfg, item_id=None):
         "unit": _str(data.get("unit"), 16),
         "y_min": y_min,
         "y_max": y_max,
+        "y2_min": y2_min,
+        "y2_max": y2_max,
         "height": height if height in CHART_HEIGHTS else "m",
         "stepped": bool(data.get("stepped")),
         "fill": bool(data.get("fill")),
@@ -2371,6 +2382,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
   }
   .series-row .sr-topic{ -webkit-flex:2; flex:2; min-width:0; }
   .series-row .sr-label{ -webkit-flex:1; flex:1; min-width:0; }
+  .series-row .sr-unit{ width:74px; -webkit-flex-shrink:0; flex-shrink:0; }
+  .series-row .sr-axis{ width:84px; -webkit-flex-shrink:0; flex-shrink:0; padding:9px 6px; font-size:12px; }
+  @media(max-width:640px){
+    .series-row{ -webkit-flex-wrap:wrap; flex-wrap:wrap; padding-bottom:8px; border-bottom:1px dashed #1b2027; }
+    .series-row .sr-topic{ -webkit-flex:1 1 calc(100% - 30px); flex:1 1 calc(100% - 30px); margin-bottom:6px; }
+    .series-row .sr-label{ -webkit-flex:1 1 100%; flex:1 1 100%; margin:0 0 6px 24px; }
+    .series-row .sr-unit{ margin-left:24px; }
+  }
   .series-row .sr-color{ width:42px; height:36px; padding:2px; -webkit-flex-shrink:0; flex-shrink:0; cursor:pointer; }
   .discover{
     border:1px solid var(--border); border-radius:8px; margin:4px 0 16px; background:#0d1014;
@@ -2634,10 +2653,17 @@ INDEX_HTML = r"""<!DOCTYPE html>
       <input id="cm_filter" placeholder="Filtern ..." oninput="renderDiscover('cm')">
       <div class="discover-list" id="cm_discover"></div>
     </div>
+    <div class="hint-text" style="margin:-4px 0 12px;">
+      Jedes Topic kann eine <b>eigene Einheit</b> haben (leer = Standard-Einheit unten). Topics mit einer
+      anderen Einheit als das erste Topic erscheinen bei Achse &bdquo;auto&ldquo; an einer <b>zweiten Y-Achse rechts</b>
+      mit eigener Skala &ndash; die Zuordnung l&auml;sst sich je Topic fest auf links/rechts stellen.
+    </div>
     <div class="field-grid">
-      <div class="fld narrow"><label>Einheit</label><input id="cm_unit" placeholder="z. B. &deg;C"></div>
-      <div class="fld narrow"><label>Y-Minimum</label><input id="cm_ymin" placeholder="auto"></div>
-      <div class="fld narrow"><label>Y-Maximum</label><input id="cm_ymax" placeholder="auto"></div>
+      <div class="fld narrow"><label>Standard-Einheit</label><input id="cm_unit" placeholder="z. B. &deg;C" oninput="updateSeriesUnitHints()"></div>
+      <div class="fld narrow"><label>Y-Min links</label><input id="cm_ymin" placeholder="auto"></div>
+      <div class="fld narrow"><label>Y-Max links</label><input id="cm_ymax" placeholder="auto"></div>
+      <div class="fld narrow"><label>Y-Min rechts</label><input id="cm_y2min" placeholder="auto"></div>
+      <div class="fld narrow"><label>Y-Max rechts</label><input id="cm_y2max" placeholder="auto"></div>
     </div>
     <div class="field-grid">
       <div class="fld narrow"><label>H&ouml;he</label>
@@ -3098,9 +3124,31 @@ function sliderCommit(id, el){
 }
 
 /* ---------------------------------------------------------- Diagramme */
+/* v2.2.0: Einheit je Topic. Wirksame Einheit = eigene Einheit des Topics,
+   sonst die Standard-Einheit des Diagramms. Achse "auto": gleiche Einheit wie
+   das erste Topic -> links, andere Einheit -> rechts (eigene Skala). */
+function seriesUnit(c, s){ return (s && s.unit) || c.unit || ""; }
+function seriesAxes(c){
+  var first = c.series.length ? seriesUnit(c, c.series[0]) : "", out = [], anyL = false, i;
+  for(i = 0; i < c.series.length; i++){
+    var s = c.series[i], ax = s.axis === "right" ? "R" : (s.axis === "left" ? "L" : (seriesUnit(c, s) === first ? "L" : "R"));
+    if(ax === "L") anyL = true;
+    out.push(ax);
+  }
+  if(!anyL) for(i = 0; i < out.length; i++) out[i] = "L";   /* alles rechts -> eine Achse links */
+  return out;
+}
+function axisUnits(c, axes, which){
+  var u = [];
+  for(var i = 0; i < c.series.length; i++) if(axes[i] === which) u.push(seriesUnit(c, c.series[i]));
+  return uniq(u);
+}
 function chartCardHtml(c){
   var h = '<div class="chart-card" id="cc_' + c.id + '"><div class="card-head"><div><span class="name">' + esc(c.name) + "</span>";
-  if(c.unit) h += '<span class="type-badge">' + esc(c.unit) + "</span>";
+  var units = [];
+  for(var u = 0; u < c.series.length; u++) units.push(seriesUnit(c, c.series[u]));
+  units = uniq(units);
+  if(units.length) h += '<span class="type-badge">' + esc(units.join(" \u00b7 ")) + "</span>";
   if(c.range_h) h += '<span class="type-badge">' + c.range_h + " h</span>";
   h += '</div></div><div class="legend">';
   for(var i = 0; i < c.series.length; i++){
@@ -3118,8 +3166,8 @@ function updateLegends(){
     for(var j = 0; j < cs[i].series.length; j++){
       var el = $("lv_" + cs[i].id + "_" + j);
       if(!el) continue;
-      var st = APP.states[cs[i].series[j].topic];
-      el.textContent = st ? (st.numeric !== null && st.numeric !== undefined ? fmtNum(st.numeric, null) + (cs[i].unit ? " " + cs[i].unit : "") : st.value) : "–";
+      var st = APP.states[cs[i].series[j].topic], un = seriesUnit(cs[i], cs[i].series[j]);
+      el.textContent = st ? (st.numeric !== null && st.numeric !== undefined ? fmtNum(st.numeric, null) + (un ? " " + un : "") : st.value) : "\u2013";
     }
   }
 }
@@ -3174,6 +3222,18 @@ function pathIndices(d, from, end, X){
   return out;
 }
 
+function makeAxis(mn, mx, any, fMin, fMax, h){
+  var fixedMin = fMin !== null && fMin !== undefined, fixedMax = fMax !== null && fMax !== undefined;
+  if(!any){ mn = 0; mx = 1; }
+  if(mx - mn < 1e-9){ mn -= 1; mx += 1; }
+  else { var pad = (mx - mn) * 0.08; if(!fixedMin) mn -= pad; if(!fixedMax) mx += pad; }
+  if(fixedMin) mn = fMin;
+  if(fixedMax) mx = fMax;
+  if(mx <= mn) mx = mn + 1;
+  var step = niceStep((mx - mn) / (h < 200 ? 3 : 5)), ticks = [], v = Math.ceil(mn / step - 1e-9) * step;
+  for(; v <= mx + 1e-9 && ticks.length < 20; v += step) ticks.push(Math.abs(v) < step * 1e-9 ? 0 : v);
+  return { min: mn, max: mx, ticks: ticks };
+}
 function drawChart(c){
   var cv = $("cv_" + c.id);
   if(!cv || !cv.getContext) return;
@@ -3189,46 +3249,64 @@ function drawChart(c){
 
   var rangeMs = (c.range_h || APP.rangeH) * 3600000;
   var t1 = serverNow(), t0 = t1 - rangeMs;
-  var ymin = Infinity, ymax = -Infinity, any = false, ser = [], i, k;
+  var axes = seriesAxes(c), ser = [], i, k, anyAll = false;
+  var rng = { L: { min: Infinity, max: -Infinity, any: false, n: 0 }, R: { min: Infinity, max: -Infinity, any: false, n: 0 } };
   for(i = 0; i < c.series.length; i++){
-    var s = c.series[i], d = APP.data[s.topic], col = seriesColor(s, i);
-    if(!d || !d.x.length){ ser.push({ s: s, col: col, d: null }); continue; }
+    var s = c.series[i], d = APP.data[s.topic], col = seriesColor(s, i), ax = axes[i], r = rng[ax];
+    r.n++;
+    if(!d || !d.x.length){ ser.push({ s: s, col: col, d: null, ax: ax, unit: seriesUnit(c, s) }); continue; }
     var st = bisect(d.x, t0), en = d.x.length;
-    for(k = st; k < en; k++){ var v = d.y[k]; if(v < ymin) ymin = v; if(v > ymax) ymax = v; any = true; }
+    for(k = st; k < en; k++){ var v = d.y[k]; if(v < r.min) r.min = v; if(v > r.max) r.max = v; r.any = true; }
     var from = st;
     if(st > 0){
       from = st - 1;
-      if(c.stepped || st < en){ var pv = d.y[st - 1]; if(pv < ymin) ymin = pv; if(pv > ymax) ymax = pv; any = true; }
+      if(c.stepped || st < en){ var pv = d.y[st - 1]; if(pv < r.min) r.min = pv; if(pv > r.max) r.max = pv; r.any = true; }
     }
-    ser.push({ s: s, col: col, d: d, from: from, end: en, st: st });
+    if(r.any) anyAll = true;
+    ser.push({ s: s, col: col, d: d, from: from, end: en, st: st, ax: ax, unit: seriesUnit(c, s) });
   }
-  $("ce_" + c.id).style.display = any ? "none" : "block";
-  var fixedMin = c.y_min !== null && c.y_min !== undefined, fixedMax = c.y_max !== null && c.y_max !== undefined;
-  if(!any){ ymin = 0; ymax = 1; }
-  if(ymax - ymin < 1e-9){ ymin -= 1; ymax += 1; }
-  else { var padY = (ymax - ymin) * 0.08; if(!fixedMin) ymin -= padY; if(!fixedMax) ymax += padY; }
-  if(fixedMin) ymin = c.y_min;
-  if(fixedMax) ymax = c.y_max;
-  if(ymax <= ymin) ymax = ymin + 1;
+  $("ce_" + c.id).style.display = anyAll ? "none" : "block";
+  var hasR = rng.R.n > 0;
+  var A = { L: makeAxis(rng.L.min, rng.L.max, rng.L.any, c.y_min, c.y_max, h) };
+  if(hasR) A.R = makeAxis(rng.R.min, rng.R.max, rng.R.any, c.y2_min, c.y2_max, h);
+  var uL = axisUnits(c, axes, "L").join(" / "), uR = hasR ? axisUnits(c, axes, "R").join(" / ") : "";
 
-  var yStep = niceStep((ymax - ymin) / (h < 200 ? 3 : 5));
-  var yt = [], yv = Math.ceil(ymin / yStep - 1e-9) * yStep;
-  for(; yv <= ymax + 1e-9 && yt.length < 20; yv += yStep) yt.push(yv);
   ctx.font = "10px " + MONO;
-  var labW = 0;
-  for(i = 0; i < yt.length; i++){ var lw = ctx.measureText(fmtNum(yt[i], null)).width; if(lw > labW) labW = lw; }
-  var padL = Math.ceil(labW) + 12, padR = 10, padT = 8, padB = 20;
+  function labW(ax){ var m = 0; for(var q = 0; q < ax.ticks.length; q++){ var lw = ctx.measureText(fmtNum(ax.ticks[q], null)).width; if(lw > m) m = lw; } return m; }
+  var showUnits = !!(uL || uR);
+  var padL = Math.ceil(Math.max(labW(A.L), uL ? ctx.measureText(uL).width - 4 : 0)) + 12;
+  var padR = hasR ? Math.ceil(Math.max(labW(A.R), uR ? ctx.measureText(uR).width - 4 : 0)) + 12 : 10;
+  var padT = showUnits ? 18 : 8, padB = 20;
   var pw = Math.max(10, w - padL - padR), ph = Math.max(10, h - padT - padB);
   function X(t){ return padL + (t - t0) / rangeMs * pw; }
-  function Y(v){ return padT + (ymax - v) / (ymax - ymin) * ph; }
+  function mkY(ax){ return function(v){ return padT + (ax.max - v) / (ax.max - ax.min) * ph; }; }
+  var Y = { L: mkY(A.L) };
+  if(hasR) Y.R = mkY(A.R);
 
-  /* Raster + Y-Beschriftung */
+  /* Raster (linke Achse) + Beschriftung beider Achsen */
   ctx.strokeStyle = "#242a33"; ctx.lineWidth = 1; ctx.fillStyle = "#8891a0";
   ctx.textAlign = "right"; ctx.textBaseline = "middle";
-  for(i = 0; i < yt.length; i++){
-    var yy = Math.round(Y(yt[i])) + 0.5;
+  for(i = 0; i < A.L.ticks.length; i++){
+    var yy = Math.round(Y.L(A.L.ticks[i])) + 0.5;
     ctx.beginPath(); ctx.moveTo(padL, yy); ctx.lineTo(padL + pw, yy); ctx.stroke();
-    ctx.fillText(fmtNum(yt[i], null), padL - 6, yy);
+    ctx.fillText(fmtNum(A.L.ticks[i], null), padL - 6, yy);
+  }
+  if(hasR){
+    ctx.textAlign = "left";
+    for(i = 0; i < A.R.ticks.length; i++){
+      var yr = Math.round(Y.R(A.R.ticks[i])) + 0.5;
+      ctx.beginPath(); ctx.moveTo(padL + pw, yr); ctx.lineTo(padL + pw + 4, yr); ctx.stroke();
+      ctx.fillText(fmtNum(A.R.ticks[i], null), padL + pw + 6, yr);
+    }
+  }
+  /* Einheiten ueber den Achsen; bei zwei Achsen in der Farbe des ersten Topics der Achse */
+  if(showUnits){
+    ctx.textBaseline = "top";
+    var colL = "#8891a0", colR = "#8891a0";
+    if(hasR){ for(i = 0; i < ser.length; i++){ if(ser[i].ax === "L" && colL === "#8891a0") colL = ser[i].col; if(ser[i].ax === "R" && colR === "#8891a0") colR = ser[i].col; } }
+    if(uL){ ctx.textAlign = "left"; ctx.fillStyle = colL; ctx.fillText(uL, 2, 1); }
+    if(uR){ ctx.textAlign = "right"; ctx.fillStyle = colR; ctx.fillText(uR, w - 2, 1); }
+    ctx.fillStyle = "#8891a0";
   }
   /* Zeitachse (in lokaler Zeit ausgerichtet) */
   var maxTicks = Math.max(2, Math.floor(pw / 72)), xStep = TIME_STEPS[TIME_STEPS.length - 1];
@@ -3249,13 +3327,14 @@ function drawChart(c){
   ctx.lineJoin = "round"; ctx.lineCap = "round";
   for(i = 0; i < ser.length; i++){
     var sr = ser[i];
+    sr.Y = Y[sr.ax];
     if(!sr.d) continue;
     var idx = pathIndices(sr.d, sr.from, sr.end, X);
     if(!idx.length) continue;
-    var dd = sr.d, firstX = null, lastX = null, lastY = null;
+    var dd = sr.d, firstX = null, lastX = null, lastY = null, YY = sr.Y, ax0 = A[sr.ax];
     ctx.beginPath();
     for(k = 0; k < idx.length; k++){
-      var px = X(dd.x[idx[k]]), py = Y(dd.y[idx[k]]);
+      var px = X(dd.x[idx[k]]), py = YY(dd.y[idx[k]]);
       if(firstX === null){ ctx.moveTo(px, py); firstX = px; }
       else if(c.stepped){ ctx.lineTo(px, lastY); ctx.lineTo(px, py); }
       else ctx.lineTo(px, py);
@@ -3265,14 +3344,14 @@ function drawChart(c){
     if(idx.length === 1 && !c.stepped){ ctx.arc(lastX, lastY, 1.5, 0, Math.PI * 2); }
     ctx.strokeStyle = sr.col; ctx.lineWidth = 1.8; ctx.stroke();
     if(c.fill){
-      var base = Y(Math.max(ymin, Math.min(ymax, 0 >= ymin && 0 <= ymax ? 0 : ymin)));
+      var base = YY(Math.max(ax0.min, Math.min(ax0.max, 0 >= ax0.min && 0 <= ax0.max ? 0 : ax0.min)));
       ctx.lineTo(lastX, base); ctx.lineTo(firstX, base); ctx.closePath();
       ctx.fillStyle = hexToRgba(sr.col, 0.12); ctx.fill();
     }
   }
   ctx.restore();
 
-  APP.geo[c.id] = { t0: t0, rangeMs: rangeMs, padL: padL, pw: pw, padT: padT, ph: ph, Y: Y, ser: ser };
+  APP.geo[c.id] = { t0: t0, rangeMs: rangeMs, padL: padL, pw: pw, padT: padT, ph: ph, ser: ser };
   if(APP.hover && APP.hover.cid === c.id) drawTooltip(c, ctx, w, h);
 }
 
@@ -3294,11 +3373,11 @@ function drawTooltip(c, ctx, w, h){
     }
     if(best < 0 || best >= d.x.length || d.x[best] < g.t0 - g.rangeMs * 0.02 && !c.stepped) continue;
     if(!c.stepped && Math.abs(d.x[best] - t) > g.rangeMs / 12) continue;
-    var py = g.Y(d.y[best]);
+    var py = sr.Y(d.y[best]);
     var px = c.stepped ? hx : g.padL + (d.x[best] - g.t0) / g.rangeMs * g.pw;
     if(!c.stepped && tShown === null) tShown = d.x[best];
     ctx.fillStyle = sr.col; ctx.beginPath(); ctx.arc(px, py, 3.5, 0, Math.PI * 2); ctx.fill();
-    lines.push({ col: sr.col, txt: (sr.s.label || sr.s.topic) + ": " + fmtNum(d.y[best], null) + (c.unit ? " " + c.unit : "") });
+    lines.push({ col: sr.col, txt: (sr.s.label || sr.s.topic) + ": " + fmtNum(d.y[best], null) + (sr.unit ? " " + sr.unit : "") });
   }
   if(!lines.length) return;
   var tsTxt = fmtDay(tShown || t) + " " + fmtClock(tShown || t, true);
@@ -3843,9 +3922,16 @@ function renderChartsList(){
   var h = "";
   for(var i = 0; i < cs.length; i++){
     var c = cs[i], names = [];
-    for(var j = 0; j < c.series.length; j++) names.push('<span class="swatch" style="background:' + esc(seriesColor(c.series[j], j)) + ';margin-right:4px;"></span>' + esc(c.series[j].label || c.series[j].topic));
+    var axs = seriesAxes(c), units = [];
+    for(var j = 0; j < c.series.length; j++){
+      var su = seriesUnit(c, c.series[j]);
+      units.push(su);
+      names.push('<span class="swatch" style="background:' + esc(seriesColor(c.series[j], j)) + ';margin-right:4px;"></span>' + esc(c.series[j].label || c.series[j].topic) +
+        (su ? " [" + esc(su) + (axs[j] === "R" ? ", rechts" : "") + "]" : (axs[j] === "R" ? " [rechts]" : "")));
+    }
     var meta = [];
-    if(c.unit) meta.push(esc(c.unit));
+    units = uniq(units);
+    if(units.length) meta.push(esc(units.join(" \u00b7 ")));
     if(c.range_h) meta.push(c.range_h + " h");
     if(c.stepped) meta.push("Stufen");
     h += '<div class="manage-row">' + orderBtns("charts", c.id, i, cs.length) +
@@ -3873,14 +3959,17 @@ var chartEdit = { id: null, series: [] };
 function openChartModal(id){
   var c = id ? findById(APP.cfg.charts, id) : null;
   chartEdit.id = c ? c.id : null;
-  chartEdit.series = c ? JSON.parse(JSON.stringify(c.series)) : [{ topic: "", label: "", color: SERIES_COLORS[0] }];
+  chartEdit.series = c ? JSON.parse(JSON.stringify(c.series)) : [{ topic: "", label: "", color: SERIES_COLORS[0], unit: "", axis: "auto" }];
   $("chartModalTitle").textContent = c ? "Diagramm bearbeiten" : "Diagramm hinzufügen";
   $("cm_name").value = c ? c.name : "";
   fillGroupSelect("cm_group", c ? c.group_id : null);
-  $("cm_unit").value = c ? c.unit : "";
-  $("cm_ymin").value = c && c.y_min !== null ? String(c.y_min).replace(".", ",") : "";
-  $("cm_ymax").value = c && c.y_max !== null ? String(c.y_max).replace(".", ",") : "";
-  $("cm_height").value = c ? c.height : "m";
+  $("cm_unit").value = c ? (c.unit || "") : "";
+  function numField(v){ return v === null || v === undefined || v === "" ? "" : String(v).replace(".", ","); }
+  $("cm_ymin").value = c ? numField(c.y_min) : "";
+  $("cm_ymax").value = c ? numField(c.y_max) : "";
+  $("cm_y2min").value = c ? numField(c.y2_min) : "";
+  $("cm_y2max").value = c ? numField(c.y2_max) : "";
+  $("cm_height").value = c ? (c.height || "m") : "m";
   $("cm_stepped").value = c && c.stepped ? "1" : "0";
   $("cm_fill").checked = !!(c && c.fill);
   var rh = '<option value="">wie Ansicht (Umschalter oben)</option>';
@@ -3894,27 +3983,37 @@ function openChartModal(id){
   loadTopics();
 }
 function renderSeriesRows(){
-  var h = "";
+  var h = "", def = $("cm_unit").value;
   for(var i = 0; i < chartEdit.series.length; i++){
-    var s = chartEdit.series[i];
+    var s = chartEdit.series[i], ax = s.axis || "auto";
     h += '<div class="series-row"><span class="sr-idx">' + (i + 1) + "</span>" +
       '<input class="sr-topic" list="topicDatalist" placeholder="Topic" value="' + esc(s.topic) + '">' +
       '<input class="sr-label" placeholder="Bezeichnung (optional)" value="' + esc(s.label) + '">' +
+      '<input class="sr-unit" placeholder="' + esc(def || "Einheit") + '" title="Einheit dieses Topics (leer = Standard-Einheit)" value="' + esc(s.unit || "") + '">' +
+      '<select class="sr-axis" title="Y-Achse: auto = gleiche Einheit wie das erste Topic links, andere Einheit rechts">' +
+        '<option value="auto"' + (ax === "auto" ? " selected" : "") + ">auto</option>" +
+        '<option value="left"' + (ax === "left" ? " selected" : "") + ">links</option>" +
+        '<option value="right"' + (ax === "right" ? " selected" : "") + ">rechts</option></select>" +
       '<input class="sr-color" type="color" value="' + esc(seriesColor(s, i)) + '">' +
       '<button class="btn-mini btn-delete" title="Topic entfernen" onclick="removeSeries(' + i + ')">&times;</button></div>';
   }
-  $("cm_series").innerHTML = h || '<div class="hint-text">Noch kein Topic gewählt.</div>';
+  $("cm_series").innerHTML = h || '<div class="hint-text">Noch kein Topic gew\u00e4hlt.</div>';
 }
 function syncSeries(){
   var rows = $("cm_series").getElementsByClassName("series-row"), out = [];
+  function val(row, cls){ return row.getElementsByClassName(cls)[0].value.replace(/^\s+|\s+$/g, ""); }
   for(var i = 0; i < rows.length; i++){
     out.push({
-      topic: rows[i].getElementsByClassName("sr-topic")[0].value.replace(/^\s+|\s+$/g, ""),
-      label: rows[i].getElementsByClassName("sr-label")[0].value.replace(/^\s+|\s+$/g, ""),
+      topic: val(rows[i], "sr-topic"), label: val(rows[i], "sr-label"), unit: val(rows[i], "sr-unit"),
+      axis: rows[i].getElementsByClassName("sr-axis")[0].value,
       color: rows[i].getElementsByClassName("sr-color")[0].value
     });
   }
   chartEdit.series = out;
+}
+function updateSeriesUnitHints(){
+  var def = $("cm_unit").value || "Einheit", els = $("cm_series").getElementsByClassName("sr-unit");
+  for(var i = 0; i < els.length; i++) els[i].placeholder = def;
 }
 function nextSeriesColor(){
   var used = {};
@@ -3926,7 +4025,7 @@ function addSeries(topic){
   syncSeries();
   var last = chartEdit.series[chartEdit.series.length - 1];
   if(topic && last && !last.topic) last.topic = topic;
-  else chartEdit.series.push({ topic: topic || "", label: "", color: nextSeriesColor() });
+  else chartEdit.series.push({ topic: topic || "", label: "", color: nextSeriesColor(), unit: "", axis: "auto" });
   renderSeriesRows();
 }
 function pickChartTopic(t){
@@ -3941,6 +4040,7 @@ function submitChartModal(){
   var payload = {
     name: $("cm_name").value, group_id: $("cm_group").value || null, series: chartEdit.series,
     unit: $("cm_unit").value, y_min: $("cm_ymin").value, y_max: $("cm_ymax").value,
+    y2_min: $("cm_y2min").value, y2_max: $("cm_y2max").value,
     height: $("cm_height").value, stepped: $("cm_stepped").value === "1", fill: $("cm_fill").checked,
     range_h: $("cm_range").value ? parseInt($("cm_range").value, 10) : null
   };

@@ -23,18 +23,29 @@
   "charts": [
     {
       "id": "chart_temp",
-      "name": "Temperaturen",
+      "name": "Wohnzimmer Klima",
       "group_id": "grp_wohnzimmer",
       "series": [
         {
           "topic": "wohnzimmer/temperatur",
-          "label": "Innen",
-          "color": "#ff9142"
+          "label": "Temperatur",
+          "color": "#ff9142",
+          "unit": "",
+          "axis": "auto"
         },
         {
           "topic": "aussen/temperatur",
           "label": "Aussen",
-          "color": "#4aa3ff"
+          "color": "#3ddc97",
+          "unit": "",
+          "axis": "auto"
+        },
+        {
+          "topic": "wohnzimmer/feuchte",
+          "label": "Luftfeuchte",
+          "color": "#4aa3ff",
+          "unit": "%",
+          "axis": "auto"
         }
       ],
       "unit": "°C",
@@ -44,7 +55,9 @@
       "stepped": false,
       "fill": false,
       "range_h": null,
-      "order": 0
+      "order": 0,
+      "y2_min": 0,
+      "y2_max": 100
     }
   ],
   "widgets": [
