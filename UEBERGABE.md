@@ -14,7 +14,7 @@ Eine Datei `app.py`, Aufbau von oben nach unten:
 | `migrate_legacy()` | Umwandlung v1.x-`mqtt_dashboard_config.json` → v2-`config.json` |
 | `import_config()` | hochgeladene Konfiguration (auch v1.x) prüfen/übernehmen, liefert Warnungen für übersprungene Einträge |
 | `ConfigStore` | Laden/Normalisieren/atomares Speichern (`.tmp` + `os.replace`), defekte Datei wird als `config.json.defekt-<ts>` gesichert |
-| `TopicStore`, `_Series` | Werte + Verlauf im Speicher, je Topic drei Zeitstufen: letzte Stunde jeder Punkt (max. 1/s), bis 12 h min/max je 15 s, bis 49 h min/max je 60 s (`_compact_into()`); Verdichtung beim Schreiben alle 10 s und per Hintergrund-Thread jede Minute |
+| `TopicStore`, `_Series` | Werte + Verlauf im Speicher, je Topic drei Zeitstufen: letzte Stunde jeder Punkt (max. 1/s), bis 12 h min/max je 15 s, bis 73 h min/max je 60 s (`_compact_into()`); Verdichtung beim Schreiben alle 10 s und per Hintergrund-Thread jede Minute |
 | `VirtualEngine` | berechnet virtuelle Topics bei Änderung einer Quelle (bis Tiefe 3, virtuell auf virtuell möglich) |
 | `InternetManager`, `clean_internet()` | Internet-Topics: Hintergrund-Thread, Open-Meteo (Wetter), Energy-Charts (EPEX, Ersatz aWATTar), Werte jede Minute in den `TopicStore`, Senden an den Broker bei Änderung bzw. alle 10 min; eigene Topics vom Broker werden ignoriert (`is_own`) |
 | `MqttManager` | paho-Client mit `loop_start`, Auto-Reconnect, Neustart bei Broker-Änderung; 1.6.x und 2.x kompatibel |
@@ -69,6 +69,16 @@ Eine Datei `app.py`, Aufbau von oben nach unten:
   weiter funktionieren; jetzt in den Einstellungen änderbar.
 
 ## Versionshistorie
+
+### v2.3.0
+- Zeitraum **72 h** in der Ansicht, als fester Diagramm-Zeitraum und als
+  Standard-Zeitraum (`RANGE_CHOICES_H`, `MAX_RANGE_H = 72`). Der Verlauf
+  wird jetzt 73 h gehalten (60-s-Stufe verlängert, bei 1 Wert/s max.
+  ~16 200 Punkte je Topic).
+- Internet-Topics, Wetter: neuer Wert **Sonneneinstrahlung**
+  (Open-Meteo `shortwave_radiation`, Globalstrahlung in W/m², Mittel der
+  vorangegangenen Periode), Standard-Unter-Topic `wetter/sonneneinstrahlung`.
+- Kleinigkeit: „1 Stunde“ statt „1 Stunden“ in den Zeitraum-Auswahlen.
 
 ### v2.2.0
 - Diagramme: **Einheit je Topic** (`series[].unit`, leer = `chart.unit` als

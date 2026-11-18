@@ -27,7 +27,7 @@ Versionierung: APP_VERSION ist die einzige Quelle der Wahrheit - der
 GitHub-Actions-Workflow liest sie aus und benennt Release/Tag danach.
 """
 
-APP_VERSION = "2.2.0"
+APP_VERSION = "2.3.0"
 
 import os
 import sys
@@ -73,8 +73,8 @@ CONFIG_PATH = os.path.join(base_dir(), "config.json")
 # v1.x-Konfiguration - wird beim ersten Start von v2 einmalig uebernommen
 LEGACY_CONFIG_PATH = os.path.join(base_dir(), "mqtt_dashboard_config.json")
 
-RANGE_CHOICES_H = [1, 6, 12, 24, 48]
-MAX_RANGE_H = 48
+RANGE_CHOICES_H = [1, 6, 12, 24, 48, 72]   # v2.3.0: 72 h ergaenzt
+MAX_RANGE_H = 72
 RETAIN_MS = (MAX_RANGE_H + 1) * 3600 * 1000
 STORE_MIN_INTERVAL_MS = 1000      # max. 1 gespeicherter Messpunkt/s je Topic (wie v1.9)
 # v2.0.3: Verlauf zeitlich gestaffelt statt fester Punktzahl. Bis v2.0.2 galt
@@ -82,8 +82,8 @@ STORE_MIN_INTERVAL_MS = 1000      # max. 1 gespeicherter Messpunkt/s je Topic (w
 # 24h-/48h-Ansicht brach die Linie deshalb mitten im Diagramm ab.
 #   letzte Stunde ........ jeder Punkt (max. 1/s)
 #   1 h bis 12 h ......... min + max je 15 s
-#   12 h bis 49 h ........ min + max je 60 s
-# Bei 1 Wert/s sind das max. ~13 300 Punkte je Topic fuer volle 49 h; Spitzen
+#   12 h bis 73 h ........ min + max je 60 s (seit v2.3.0: 72-h-Ansicht)
+# Bei 1 Wert/s sind das max. ~16 200 Punkte je Topic fuer volle 73 h; Spitzen
 # bleiben durch min/max erhalten.
 RAW_KEEP_MS = 3600 * 1000
 MID_KEEP_MS = 12 * 3600 * 1000
@@ -130,6 +130,7 @@ INTERNET_DEFAULT = {
             "apparent": {"enabled": False, "topic": "wetter/gefuehlte_temperatur"},
             "humidity": {"enabled": False, "topic": "wetter/luftfeuchte"},
             "wind": {"enabled": False, "topic": "wetter/wind"},
+            "radiation": {"enabled": False, "topic": "wetter/sonneneinstrahlung"},
         },
     },
     "price": {
@@ -817,7 +818,7 @@ class TopicStore:
 
     def compact_all(self):
         """Regelmaessig aufgerufen (Hintergrund-Thread), damit auch Topics, die
-        nichts mehr senden, verdichtet und nach 49 h verworfen werden."""
+        nichts mehr senden, verdichtet und nach 73 h verworfen werden."""
         with self.lock:
             now = now_ms()
             for t in list(self.data):
@@ -1112,6 +1113,9 @@ WEATHER_FIELDS = {   # Schluessel -> (Open-Meteo-Feld, Einheit, Nachkommastellen
     "apparent": ("apparent_temperature", "°C", 1),
     "humidity": ("relative_humidity_2m", "%", 0),
     "wind": ("wind_speed_10m", "km/h", 1),
+    # v2.3.0: Globalstrahlung (GHI) auf die horizontale Flaeche, Mittel der
+    # vorangegangenen 15 min bzw. Stunde (je nach Wettermodell am Ort)
+    "radiation": ("shortwave_radiation", "W/m²", 0),
 }
 PRICE_KEYS = ("current", "min", "max", "avg", "total")
 WEATHER_INTERVALS = (5, 10, 15, 30, 60)
@@ -2797,7 +2801,7 @@ var APP = {
   geo: {}              // chart-id -> Geometrie fuer Tooltip
 };
 
-var RANGE_CHOICES = [1, 6, 12, 24, 48];
+var RANGE_CHOICES = [1, 6, 12, 24, 48, 72];
 
 var DEVICES = {
   lamp:        { icon: "&#128161;", color: "#f5c518", label: "Lampe" },
@@ -3538,7 +3542,8 @@ function updateDownloadLink(){
 }
 /* ------------------------------------------------ Internet-Topics */
 var WEATHER_META = [["temperature", "Temperatur"], ["apparent", "Gef\u00fchlte Temperatur"],
-                    ["humidity", "Luftfeuchte"], ["wind", "Windgeschwindigkeit"]];
+                    ["humidity", "Luftfeuchte"], ["wind", "Windgeschwindigkeit"],
+                    ["radiation", "Sonneneinstrahlung (Globalstrahlung)"]];
 var PRICE_META = [["current", "Aktueller Preis"], ["min", "Heute Minimum"], ["max", "Heute Maximum"],
                   ["avg", "Heute Mittelwert"], ["total", "Endpreis (Aufschlag + MwSt)"]];
 var INET = { loc: null };
@@ -3744,7 +3749,7 @@ function fillGeneralForm(){
   $("gen_title").value = APP.cfg.title || "";
   $("gen_port").value = APP.cfg.server.port;
   var h = "";
-  for(var i = 0; i < RANGE_CHOICES.length; i++) h += '<option value="' + RANGE_CHOICES[i] + '"' + (RANGE_CHOICES[i] === APP.cfg.default_range_h ? " selected" : "") + ">" + RANGE_CHOICES[i] + " Stunden</option>";
+  for(var i = 0; i < RANGE_CHOICES.length; i++) h += '<option value="' + RANGE_CHOICES[i] + '"' + (RANGE_CHOICES[i] === APP.cfg.default_range_h ? " selected" : "") + ">" + RANGE_CHOICES[i] + (RANGE_CHOICES[i] === 1 ? " Stunde" : " Stunden") + "</option>";
   $("gen_range").innerHTML = h;
   $("dl_pw").checked = false;
   $("dl_pw_row").style.display = APP.cfg.broker.password_set ? "" : "none";
@@ -3973,7 +3978,7 @@ function openChartModal(id){
   $("cm_stepped").value = c && c.stepped ? "1" : "0";
   $("cm_fill").checked = !!(c && c.fill);
   var rh = '<option value="">wie Ansicht (Umschalter oben)</option>';
-  for(var i = 0; i < RANGE_CHOICES.length; i++) rh += '<option value="' + RANGE_CHOICES[i] + '"' + (c && c.range_h === RANGE_CHOICES[i] ? " selected" : "") + ">immer " + RANGE_CHOICES[i] + " Stunden</option>";
+  for(var i = 0; i < RANGE_CHOICES.length; i++) rh += '<option value="' + RANGE_CHOICES[i] + '"' + (c && c.range_h === RANGE_CHOICES[i] ? " selected" : "") + ">immer " + RANGE_CHOICES[i] + (RANGE_CHOICES[i] === 1 ? " Stunde" : " Stunden") + "</option>";
   $("cm_range").innerHTML = rh;
   $("cm_filter").value = "";
   hideError("chartModalError");

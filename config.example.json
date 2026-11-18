@@ -142,6 +142,10 @@
         "wind": {
           "enabled": false,
           "topic": "wetter/wind"
+        },
+        "radiation": {
+          "enabled": true,
+          "topic": "wetter/sonneneinstrahlung"
         }
       }
     },

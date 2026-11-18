@@ -94,7 +94,7 @@ Wie im Drucker Dashboard gibt es zwei Modi, umschaltbar über
 
 - **Ansicht** (Standard): Diagramme ansehen, Schalter/Slider bedienen,
   Anzeigen ablesen. Oben rechts: Verbindungsstatus, **Zeitraum**
-  (1/6/12/24/48 h) und **Diagramm-Spalten** (1/2/3/4). Beide Auswahlen
+  (1/6/12/24/48/72 h) und **Diagramm-Spalten** (1/2/3/4). Beide Auswahlen
   merkt sich jeder Browser selbst. Gruppen lassen sich per Klick auf die
   Überschrift auf- und zuklappen. Hinzufügen/Löschen ist hier bewusst
   **nicht** möglich.
@@ -126,7 +126,7 @@ Ein Diagramm kann jederzeit nachträglich bearbeitet werden:
 | Y-Min/Max links, Y-Min/Max rechts | feste Achsengrenzen je Achse, leer = automatisch |
 | Höhe | Klein / Mittel / Groß |
 | Linienart | Linie oder **Stufen** (ideal für Schaltzustände 0/1) |
-| Zeitraum | wie Ansicht, oder fest 1/6/12/24/48 h für dieses Diagramm |
+| Zeitraum | wie Ansicht, oder fest 1/6/12/24/48/72 h für dieses Diagramm |
 | Fläche füllen | halbtransparente Fläche unter den Linien |
 
 **Unterschiedliche Einheiten in einem Diagramm:** Jedes Topic kann eine
@@ -180,10 +180,14 @@ API-Schlüssel nötig; das Gerät (PC bzw. Brume 2) braucht Internet.
 
 | Quelle | Werte | Abruf |
 |---|---|---|
-| **Wetter** – [Open-Meteo](https://open-meteo.com/) | Temperatur, gefühlte Temperatur, Luftfeuchte, Windgeschwindigkeit am gewählten Ort | alle 5–60 min (einstellbar) |
+| **Wetter** – [Open-Meteo](https://open-meteo.com/) | Temperatur, gefühlte Temperatur, Luftfeuchte, Windgeschwindigkeit, Sonneneinstrahlung (Globalstrahlung in W/m²) am gewählten Ort | alle 5–60 min (einstellbar) |
 | **Strompreis** – EPEX Day-Ahead über [Energy-Charts / Fraunhofer ISE](https://www.energy-charts.info/), Ersatz für DE-LU/AT: aWATTar | aktueller Preis, heute Minimum/Maximum/Mittel, Endpreis | stündlich, aktueller Preis wird jede Minute fortgeschrieben (15-min-Raster) |
 
 - **Ort:** Name oder PLZ eingeben, „Ort suchen“, Treffer antippen.
+- **Sonneneinstrahlung:** Globalstrahlung (GHI) auf eine waagerechte
+  Fläche in W/m², gemittelt über die letzten 15 min bzw. die letzte
+  Stunde (je nach Wettermodell am Ort) – gut z. B. zum Vergleich mit der
+  PV-Leistung. Nachts 0.
 - **Strompreis:** Gebotszone wählen (DE-LU, AT, CH, NL, …), Einheit
   ct/kWh oder €/MWh. Börsenpreise sind netto, ohne Netzentgelte, Steuern
   und Abgaben. Der **Endpreis** rechnet `(Börsenpreis + Aufschlag) × (1 + MwSt)`
@@ -237,9 +241,9 @@ Topics). Die alte Datei bleibt unverändert. Der Port bleibt **5001**.
 
 - Messwerte werden wie in v1.9 **nur im Arbeitsspeicher** gehalten –
   nach einem Neustart beginnen die Diagramme leer. Gespeichert werden
-  volle 48 h je Topic: die letzte Stunde mit jedem Wert (max. 1/s),
+  volle 72 h je Topic: die letzte Stunde mit jedem Wert (max. 1/s),
   ältere Werte als Minimum/Maximum je 15 s (bis 12 h) bzw. je 60 s
-  (bis 48 h) – Spitzen bleiben also sichtbar.
+  (bis 72 h) – Spitzen bleiben also sichtbar.
 - Es wird `#` abonniert, also alle Topics des Brokers.
 - Internet-Topics brauchen eine Internetverbindung; ohne Verbindung
   bleiben die letzten Werte bis zu ca. 3 Abrufintervalle stehen.
